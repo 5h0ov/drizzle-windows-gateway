@@ -1,0 +1,12 @@
+/target
+
+drizzle-gateway-volume/
+*.log
+
+
+.temp_update/
+*.zip
+
+
+*.exe
+

@@ -1,0 +1,146 @@
+name: Build and Release Windows Native
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'   # Run weekly every Sunday at midnight UTC to check for new Drizzle versions
+  workflow_dispatch:        # Allow manual trigger from GitHub UI
+    inputs:
+      force_build:
+        description: 'Force build and release even if version is already released'
+        type: boolean
+        default: false
+      version:
+        description: 'Drizzle Gateway version (leave empty to auto-detect latest from docs)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  check-and-build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Determine Target Version
+        id: version_check
+        shell: pwsh
+        run: |
+          $manualVer = "${{ github.event.inputs.version }}".Trim()
+          if ($manualVer) {
+            $ver = $manualVer
+          } else {
+            try {
+              $html = (Invoke-WebRequest -Uri "https://gateway.drizzle.team/docs/binary" -UseBasicParsing).Content
+              if ($html -match 'drizzle-gateway-(\d+\.\d+\.\d+)-linux-x64') {
+                $ver = $Matches[1]
+              } else {
+                $ver = "1.6.0"
+              }
+            } catch {
+              $ver = "1.6.0"
+            }
+          }
+          Write-Output "Resolved target Drizzle version: $ver"
+          echo "target_version=$ver" >> $env:GITHUB_OUTPUT
+
+      - name: Check if Release Already Exists
+        id: release_check
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ver = "${{ steps.version_check.outputs.target_version }}"
+          $force = "${{ github.event.inputs.force_build }}" -eq "true"
+          
+          if ($force) {
+            Write-Output "Force build requested. Proceeding with build."
+            echo "should_build=true" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+
+          # Check if release tag exists in repository
+          $exists = gh release view "v$ver" --json tagName -q ".tagName" 2>$null
+          $hadError = $LASTEXITCODE -ne 0
+          $LASTEXITCODE = 0  # Crucial: Reset exit code so PowerShell step does not fail
+
+          if (-not $hadError -and $exists) {
+            Write-Output "Release v$ver already exists on GitHub and force_build is false. Skipping build."
+            echo "should_build=false" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Output "New version detected: v$ver has not been released yet. Proceeding with build."
+            echo "should_build=true" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Extract, Patch, and Compile
+        if: steps.release_check.outputs.should_build == 'true'
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.version_check.outputs.target_version }}"
+          Write-Output "Building Drizzle Gateway Native Windows for version: $ver"
+          bun run scripts/update-gateway.mjs $ver
+
+      - name: Package Distribution Zip
+        id: package
+        if: steps.release_check.outputs.should_build == 'true'
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.version_check.outputs.target_version }}"
+          $distFolder = "drizzle-gateway-windows-v$ver"
+          New-Item -ItemType Directory -Path $distFolder -Force
+          Copy-Item -Path "DrizzleGateway.exe" -Destination $distFolder
+          Copy-Item -Path "DrizzleGatewayServer.exe" -Destination $distFolder
+          Copy-Item -Path "assets" -Destination $distFolder -Recurse
+          Copy-Item -Path "README.md" -Destination $distFolder
+
+          $zipName = "drizzle-gateway-windows-v$ver-x64.zip"
+          Compress-Archive -Path "$distFolder\*" -DestinationPath $zipName -Force
+          Write-Output "Package created: $zipName"
+          echo "zip_name=$zipName" >> $env:GITHUB_OUTPUT
+
+      - name: Upload Artifact
+        if: steps.release_check.outputs.should_build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: drizzle-gateway-windows-x64
+          path: "*.zip"
+
+      - name: Create GitHub Release
+        if: steps.release_check.outputs.should_build == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ steps.version_check.outputs.target_version }}"
+          name: "Drizzle Gateway Windows Native v${{ steps.version_check.outputs.target_version }}"
+          files: "*.zip"
+          body: |
+            ## Drizzle Gateway Windows Native v${{ steps.version_check.outputs.target_version }}
+            
+            100% Native Windows desktop build of Drizzle Gateway (Zero WSL, Zero Docker).
+            
+            ### Highlights:
+            * Built from official Drizzle Gateway v${{ steps.version_check.outputs.target_version }}
+            * Persistent database connections: `%APPDATA%\DrizzleGateway\data\store.json`
+            * Persistent UI, tabs & queries: `%APPDATA%\DrizzleGateway\webview2\`
+            * Isolated clean structure (`assets/` subfolder)
+            
+            ### How to run:
+            1. Extract the zip file.
+            2. Double-click **`DrizzleGateway.exe`**.
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
