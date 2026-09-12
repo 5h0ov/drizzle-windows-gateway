@@ -157,7 +157,9 @@ func startServer(serverBin string, port int, storeDir string) (*exec.Cmd, error)
 }
 
 func stopServer(cmd *exec.Cmd) {
-	_ = exec.Command("taskkill", "/F", "/IM", "DrizzleGatewayServer.exe").Run()
+	killCmd := exec.Command("taskkill", "/F", "/T", "/IM", "DrizzleGatewayServer.exe")
+	killCmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000} // CREATE_NO_WINDOW
+	_ = killCmd.Run()
 	if cmd != nil && cmd.Process != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()

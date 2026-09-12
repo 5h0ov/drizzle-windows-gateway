@@ -94,6 +94,31 @@ jobs:
           Write-Output "Building Drizzle Gateway Native Windows for version: $ver"
           bun run scripts/update-gateway.mjs $ver
 
+      - name: Run Self-Tests & Verify Endpoints
+        if: steps.release_check.outputs.should_build == 'true'
+        shell: pwsh
+        run: |
+          Write-Output "Starting test daemon to verify endpoints..."
+          $server = Start-Process -FilePath ".\DrizzleGatewayServer.exe" -PassThru -NoNewWindow
+          Start-Sleep -Seconds 3
+          try {
+            $health = Invoke-RestMethod -Uri "http://127.0.0.1:4983/health"
+            if ($health.status -ne "ok") {
+              throw "Health check failed: expected ok, got $($health.status)"
+            }
+            $html = Invoke-WebRequest -Uri "http://127.0.0.1:4983/"
+            $css = Invoke-WebRequest -Uri "http://127.0.0.1:4983/index.css"
+            $js = Invoke-WebRequest -Uri "http://127.0.0.1:4983/index.js"
+            
+            Write-Output "Health: $($health.status) [OK]"
+            Write-Output "HTML: $($html.StatusCode) length $($html.Content.Length) [OK]"
+            Write-Output "CSS: $($css.StatusCode) length $($css.Content.Length) [OK]"
+            Write-Output "JS: $($js.StatusCode) length $($js.Content.Length) [OK]"
+            Write-Output "All CI endpoint verification tests passed successfully!"
+          } finally {
+            Stop-Process -Id $server.Id -Force
+          }
+
       - name: Package Distribution Zip
         id: package
         if: steps.release_check.outputs.should_build == 'true'
@@ -112,12 +137,13 @@ jobs:
           Write-Output "Package created: $zipName"
           echo "zip_name=$zipName" >> $env:GITHUB_OUTPUT
 
-      - name: Upload Artifact
+      - name: Upload Build Artifacts
         if: steps.release_check.outputs.should_build == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: drizzle-gateway-windows-x64
           path: "*.zip"
+          if-no-files-found: error
 
       - name: Create GitHub Release
         if: steps.release_check.outputs.should_build == 'true'
@@ -136,6 +162,7 @@ jobs:
             * Persistent database connections: `%APPDATA%\DrizzleGateway\data\store.json`
             * Persistent UI, tabs & queries: `%APPDATA%\DrizzleGateway\webview2\`
             * Isolated clean structure (`assets/` subfolder)
+            * Automated CI tests verified
             
             ### How to run:
             1. Extract the zip file.
