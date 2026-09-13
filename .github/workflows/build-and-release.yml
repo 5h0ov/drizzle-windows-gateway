@@ -93,7 +93,7 @@ jobs:
           $ver = "${{ steps.version_check.outputs.target_version }}"
           Write-Output "Building Drizzle Gateway Native Windows for version: $ver"
           bun install
-          bun run scripts/update-gateway.mjs $ver
+          bun run update $ver
 
       - name: Run Self-Tests & Verify Endpoints
         if: steps.release_check.outputs.should_build == 'true'
@@ -172,3 +172,4 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

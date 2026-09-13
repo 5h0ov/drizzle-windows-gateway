@@ -1,4 +1,10 @@
 {
+  "name": "drizzle-windows-gateway",
+  "private": true,
+  "scripts": {
+    "update": "bun run scripts/update-gateway.mjs",
+    "build": "cmd /c build.bat"
+  },
   "dependencies": {},
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2"
