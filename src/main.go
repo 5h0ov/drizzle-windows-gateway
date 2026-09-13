@@ -160,6 +160,7 @@ func main() {
 	wvDir := filepath.Join(filepath.Dir(storeDir), "webview2")
 	_ = os.MkdirAll(wvDir, 0o755)
 	_ = os.Setenv("WEBVIEW2_USER_DATA_FOLDER", wvDir)
+	_ = os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-features=Translate,OptimizationHints,MediaRouter --disable-background-networking --disable-component-update --disable-extensions")
 
 	w := webview.New(false)
 	defer w.Destroy()

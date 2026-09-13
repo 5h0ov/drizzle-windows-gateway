@@ -266,7 +266,7 @@ func trimAllGatewayMemory(exeBaseName, serverBaseName string) {
 
 	for _, e := range allEntries {
 		name := syscall.UTF16ToString(e.SzExeFile[:])
-		if strings.EqualFold(name, serverBaseName) || strings.EqualFold(name, exeBaseName) || relatedPids[e.Th32ProcessID] {
+		if strings.EqualFold(name, serverBaseName) || strings.EqualFold(name, exeBaseName) || strings.EqualFold(name, "msedgewebview2.exe") || relatedPids[e.Th32ProcessID] {
 			trimProcessMemory(e.Th32ProcessID)
 		}
 	}
