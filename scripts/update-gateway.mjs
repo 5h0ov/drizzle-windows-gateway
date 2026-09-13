@@ -176,18 +176,19 @@ if (svgAsset) {
     }
 
     const icoBuf = Buffer.concat([header, ...entries, ...pngList.map(i => i.buffer)]);
-    fs.writeFileSync(path.join(rootDir, "app.ico"), icoBuf);
-    fs.writeFileSync(path.join(rootDir, "app.rc"), '1 ICON "app.ico"\n');
+    const srcDir = path.join(rootDir, "src");
+    fs.writeFileSync(path.join(srcDir, "app.ico"), icoBuf);
+    fs.writeFileSync(path.join(srcDir, "app.rc"), '1 ICON "app.ico"\n');
 
     // Compile app.syso if windres is available
     try {
-      execSync(`windres -O coff -o "${path.join(rootDir, "app.syso")}" "${path.join(rootDir, "app.rc")}"`, {
-        cwd: rootDir,
+      execSync(`windres -O coff -o "${path.join(srcDir, "app.syso")}" "${path.join(srcDir, "app.rc")}"`, {
+        cwd: srcDir,
         stdio: "ignore"
       });
-      console.log("Successfully compiled app.syso with windres.");
+      console.log("Successfully compiled src/app.syso with windres.");
     } catch {
-      console.log("Note: windres not available in PATH; using existing app.syso if present.");
+      console.log("Note: windres not available in PATH; using existing src/app.syso if present.");
     }
     console.log("Updated application icon from upstream binary.");
   } catch (err) {

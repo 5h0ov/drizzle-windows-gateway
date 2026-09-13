@@ -64,7 +64,7 @@ func initSubclass(hwnd uintptr, w webview.WebView, storeDir string, pNid *NOTIFY
 				procSetForegroundWindow.Call(h)
 				return 0
 			case WM_RBUTTONUP:
-				showTrayContextMenu(h, w, storeDir, pNid, exePath)
+				showTrayContextMenu(h, w, storeDir, pNid, exePath, serverBinName)
 				return 0
 			}
 		}
@@ -162,8 +162,170 @@ func main() {
 	_ = os.Setenv("WEBVIEW2_USER_DATA_FOLDER", wvDir)
 	_ = os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-features=Translate,OptimizationHints,MediaRouter --disable-background-networking --disable-component-update --disable-extensions")
 
+	connRawJSON := "null"
+	if targetConnection != "" {
+		raw := getStoredConnectionRaw(storeDir, targetConnection)
+		if raw != "" {
+			connRawJSON = raw
+		}
+	}
+	isEmptyStr := "false"
+	if isEmptyWindow {
+		isEmptyStr = "true"
+	}
+	themePref := "light"
+	if isDark {
+		themePref = "dark"
+	}
+
+	initScript := fmt.Sprintf(`
+(function() {
+	// Only execute on actual HTTP pages, ignore data: loading screen
+	if (!window.location.href.startsWith('http')) return;
+
+	const initConn = %s;
+	const initEmpty = %s;
+	const themePref = '%s';
+
+	try {
+		if (!localStorage.getItem('theme')) {
+			localStorage.setItem('theme', themePref);
+		}
+	} catch(e) {}
+
+	// If this window was explicitly launched with a target connection or as an empty window:
+	if (initConn) {
+		try {
+			sessionStorage.setItem('drizzle_window_conn', JSON.stringify(initConn));
+			sessionStorage.removeItem('drizzle_window_empty');
+		} catch(e) {}
+	} else if (initEmpty) {
+		try {
+			sessionStorage.setItem('drizzle_window_empty', 'true');
+			sessionStorage.removeItem('drizzle_window_conn');
+		} catch(e) {}
+	} else if (!sessionStorage.getItem('drizzle_window_conn') && !sessionStorage.getItem('drizzle_window_empty')) {
+		// Normal session resume: seed this window's session from localStorage
+		try {
+			const raw = localStorage.getItem('drizzle-gate');
+			if (raw) {
+				const parsed = JSON.parse(raw);
+				if (parsed && parsed.state) {
+					if (parsed.state.currentConnection) {
+						sessionStorage.setItem('drizzle_window_conn', JSON.stringify(parsed.state.currentConnection));
+					} else {
+						sessionStorage.setItem('drizzle_window_empty', 'true');
+					}
+				}
+			}
+		} catch(e) {}
+	}
+
+	// On every page load or F5 reload, restore THIS window's connection into localStorage
+	// before React reads it, preventing cross-window state collision.
+	try {
+		const winConn = sessionStorage.getItem('drizzle_window_conn');
+		const winEmpty = sessionStorage.getItem('drizzle_window_empty');
+
+		if (winEmpty === 'true') {
+			const raw = localStorage.getItem('drizzle-gate');
+			const parsed = raw ? JSON.parse(raw) : { state: {} };
+			if (!parsed.state) parsed.state = {};
+			parsed.state.currentConnection = null;
+			localStorage.setItem('drizzle-gate', JSON.stringify(parsed));
+		} else if (winConn) {
+			const connObj = JSON.parse(winConn);
+			const raw = localStorage.getItem('drizzle-gate');
+			const parsed = raw ? JSON.parse(raw) : { state: {} };
+			if (!parsed.state) parsed.state = {};
+			parsed.state.currentConnection = connObj;
+			localStorage.setItem('drizzle-gate', JSON.stringify(parsed));
+		}
+	} catch(e) {}
+
+	// Continuously keep this window's sessionStorage in sync with any user switching
+	try {
+		const origSetItem = localStorage.setItem.bind(localStorage);
+		localStorage.setItem = function(key, val) {
+			if (key === 'drizzle-gate') {
+				try {
+					const parsed = JSON.parse(val);
+					if (parsed && parsed.state) {
+						if (parsed.state.currentConnection) {
+							sessionStorage.setItem('drizzle_window_conn', JSON.stringify(parsed.state.currentConnection));
+							sessionStorage.removeItem('drizzle_window_empty');
+						} else {
+							sessionStorage.setItem('drizzle_window_empty', 'true');
+							sessionStorage.removeItem('drizzle_window_conn');
+						}
+					}
+				} catch(err) {}
+			}
+			return origSetItem(key, val);
+		};
+	} catch(e) {}
+
+	// Component synchronization helper
+	const targetObj = initConn || (function() {
+		try {
+			const s = sessionStorage.getItem('drizzle_window_conn');
+			return s ? JSON.parse(s) : null;
+		} catch(e) { return null; }
+	})();
+
+	const isTargetEmpty = initEmpty || (function() {
+		try {
+			return sessionStorage.getItem('drizzle_window_empty') === 'true';
+		} catch(e) { return false; }
+	})();
+
+	if (targetObj) {
+		let attempts = 0;
+		const timer = setInterval(() => {
+			attempts++;
+			const ds = document.querySelector('drizzle-studio');
+			if (ds && typeof ds.setCurrentConnection === 'function') {
+				ds.setCurrentConnection(targetObj);
+				clearInterval(timer);
+				return;
+			}
+			const all = Array.from(document.querySelectorAll('button, div, span, a'));
+			const match = all.find(el => el.textContent && el.textContent.trim() === targetObj.name);
+			if (match) {
+				match.click();
+				clearInterval(timer);
+				return;
+			}
+			if (attempts > 35) clearInterval(timer);
+		}, 150);
+	} else if (isTargetEmpty) {
+		let attempts = 0;
+		const timer = setInterval(() => {
+			attempts++;
+			const ds = document.querySelector('drizzle-studio');
+			if (ds && typeof ds.setCurrentConnection === 'function') {
+				ds.setCurrentConnection(null);
+				clearInterval(timer);
+				return;
+			}
+			const all = Array.from(document.querySelectorAll('button, div, span, a'));
+			const backBtn = all.find(el => el.textContent && el.textContent.trim() === 'Back to connections');
+			if (backBtn) {
+				backBtn.click();
+				clearInterval(timer);
+				return;
+			}
+			if (attempts > 40) clearInterval(timer);
+		}, 100);
+	}
+})();
+`, connRawJSON, isEmptyStr, themePref)
+
 	w := webview.New(false)
 	defer w.Destroy()
+
+	// Registered on the main UI thread before any navigation
+	w.Init(initScript)
 
 	titleWithConn := appTitle
 	if targetConnection != "" {
@@ -226,7 +388,7 @@ func main() {
 		}
 		saveWindowState(hwnd, dirName)
 
-		if countGatewayWindows(exeBase) <= 1 {
+		if reallyQuit || countGatewayWindows(exeBase) <= 1 {
 			cmdMu.Lock()
 			cmd := serverCmd
 			cmdMu.Unlock()
@@ -295,112 +457,6 @@ func main() {
 				procShowWindow.Call(hwnd, SW_SHOWMAXIMIZED)
 			}
 			w.Navigate(targetURL)
-			themePref := "light"
-			if isDark {
-				themePref = "dark"
-			}
-			js := fmt.Sprintf(`
-				if (!localStorage.getItem('theme')) {
-					localStorage.setItem('theme', '%s');
-				}
-			`, themePref)
-
-			if targetConnection != "" {
-				connRaw := getStoredConnectionRaw(storeDir, targetConnection)
-				targetJson, _ := json.Marshal(targetConnection)
-				if connRaw != "" {
-					js += fmt.Sprintf(`
-						(function() {
-							const conn = %s;
-							const target = %s;
-							try {
-								const raw = localStorage.getItem('drizzle-gate');
-								const parsed = raw ? JSON.parse(raw) : { state: {} };
-								if (!parsed.state) parsed.state = {};
-								parsed.state.currentConnection = conn;
-								localStorage.setItem('drizzle-gate', JSON.stringify(parsed));
-							} catch(e) {}
-
-							let attempts = 0;
-							const timer = setInterval(() => {
-								attempts++;
-								const ds = document.querySelector('drizzle-studio');
-								if (ds && typeof ds.setCurrentConnection === 'function') {
-									ds.setCurrentConnection(conn);
-									clearInterval(timer);
-									return;
-								}
-								const all = Array.from(document.querySelectorAll('button, div, span, a'));
-								const match = all.find(el => el.textContent && el.textContent.trim() === target);
-								if (match) {
-									match.click();
-									clearInterval(timer);
-									return;
-								}
-								if (attempts > 35) {
-									clearInterval(timer);
-								}
-							}, 150);
-						})();
-					`, connRaw, string(targetJson))
-				} else {
-					js += fmt.Sprintf(`
-						(function() {
-							const target = %s;
-							let attempts = 0;
-							const timer = setInterval(() => {
-								attempts++;
-								const all = Array.from(document.querySelectorAll('button, div, span, a'));
-								const match = all.find(el => el.textContent && el.textContent.trim() === target);
-								if (match) {
-									match.click();
-									clearInterval(timer);
-								} else if (attempts > 35) {
-									clearInterval(timer);
-								}
-							}, 150);
-						})();
-					`, string(targetJson))
-				}
-			} else if (isEmptyWindow) {
-				// Clean Empty Window: reset currentConnection to null so the Connections Panel is displayed
-				js += `
-					(function() {
-						try {
-							const raw = localStorage.getItem('drizzle-gate');
-							if (raw) {
-								const parsed = JSON.parse(raw);
-								if (parsed && parsed.state) {
-									parsed.state.currentConnection = null;
-									localStorage.setItem('drizzle-gate', JSON.stringify(parsed));
-								}
-							}
-						} catch(e) {}
-
-						let attempts = 0;
-						const timer = setInterval(() => {
-							attempts++;
-							const ds = document.querySelector('drizzle-studio');
-							if (ds && typeof ds.setCurrentConnection === 'function') {
-								ds.setCurrentConnection(null);
-								clearInterval(timer);
-								return;
-							}
-							const all = Array.from(document.querySelectorAll('button, div, span, a'));
-							const backBtn = all.find(el => el.textContent && el.textContent.trim() === 'Back to connections');
-							if (backBtn) {
-								backBtn.click();
-								clearInterval(timer);
-								return;
-							}
-							if (attempts > 40) {
-								clearInterval(timer);
-							}
-						}, 100);
-					})();
-				`
-			}
-			w.Eval(js)
 		})
 	}()
 

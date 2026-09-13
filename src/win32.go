@@ -57,6 +57,7 @@ var (
 	procProcess32NextW           = modKernel32.NewProc("Process32NextW")
 	procCloseHandle              = modKernel32.NewProc("CloseHandle")
 	procCreateMutexW             = modKernel32.NewProc("CreateMutexW")
+	procTerminateProcess         = modKernel32.NewProc("TerminateProcess")
 
 	modUser32               = syscall.NewLazyDLL("user32.dll")
 	procGetSystemMetrics    = modUser32.NewProc("GetSystemMetrics")
@@ -270,4 +271,39 @@ func trimAllGatewayMemory(exeBaseName, serverBaseName string) {
 			trimProcessMemory(e.Th32ProcessID)
 		}
 	}
+}
+
+func closeAllGatewayInstances(exeBaseName, serverBaseName string) {
+	currentPid := uint32(syscall.Getpid())
+
+	snap, _, _ := procCreateToolhelp32Snapshot.Call(0x00000002, 0)
+	if snap == uintptr(syscall.InvalidHandle) {
+		return
+	}
+	defer procCloseHandle.Call(snap)
+
+	var entry PROCESSENTRY32W
+	entry.DwSize = uint32(unsafe.Sizeof(entry))
+
+	var otherPids []uint32
+
+	ret, _, _ := procProcess32FirstW.Call(snap, uintptr(unsafe.Pointer(&entry)))
+	for ret != 0 {
+		name := syscall.UTF16ToString(entry.SzExeFile[:])
+		pid := entry.Th32ProcessID
+		if pid != currentPid && strings.EqualFold(name, exeBaseName) {
+			otherPids = append(otherPids, pid)
+		}
+		ret, _, _ = procProcess32NextW.Call(snap, uintptr(unsafe.Pointer(&entry)))
+	}
+
+	for _, pid := range otherPids {
+		hProc, _, _ := procOpenProcess.Call(0x0001, 0, uintptr(pid)) // PROCESS_TERMINATE = 0x0001
+		if hProc != 0 {
+			procTerminateProcess.Call(hProc, 0)
+			procCloseHandle.Call(hProc)
+		}
+	}
+
+	stopServers(serverBaseName)
 }

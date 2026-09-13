@@ -52,7 +52,7 @@ func setupTrayIcon(hwnd uintptr, appTitle string, hIcon uintptr) NOTIFYICONDATAW
 	return nid
 }
 
-func showTrayContextMenu(hwnd uintptr, w webview.WebView, storeDir string, pNid *NOTIFYICONDATAW, exePath string) {
+func showTrayContextMenu(hwnd uintptr, w webview.WebView, storeDir string, pNid *NOTIFYICONDATAW, exePath, serverBinName string) {
 	hMenu, _, _ := procCreatePopupMenu.Call()
 	if hMenu == 0 {
 		return
@@ -97,6 +97,7 @@ func showTrayContextMenu(hwnd uintptr, w webview.WebView, storeDir string, pNid 
 		procShell_NotifyIconW.Call(NIM_DELETE, uintptr(unsafe.Pointer(pNid)))
 		saveWindowState(hwnd, filepath.Base(filepath.Dir(storeDir)))
 		reallyQuit = true
+		closeAllGatewayInstances(filepath.Base(exePath), serverBinName)
 		w.Terminate()
 	} else if cmd >= ID_CONN_BASE && int(cmd-ID_CONN_BASE) < len(conns) {
 		selectedConn := conns[cmd-ID_CONN_BASE]
