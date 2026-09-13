@@ -140,6 +140,61 @@ for (let i = 0; i < webAssets.length; i++) {
   console.log(`Saved assets/${file.name} (${fileBuf.length} bytes - Clean)`);
 }
 
+// Automatically generate app.ico from the binary's extracted SVG favicon
+const svgAsset = webAssets.find(f => f.name.endsWith(".svg"));
+if (svgAsset) {
+  const svgPath = path.join(assetsDir, svgAsset.name);
+  console.log(`Generating application icon directly from extracted ${svgAsset.name}...`);
+  try {
+    const { Resvg } = await import("@resvg/resvg-js");
+    const svgData = fs.readFileSync(svgPath);
+    const sizes = [16, 24, 32, 48, 64, 128, 256];
+    const pngList = sizes.map(size => {
+      const resvg = new Resvg(svgData, { fitTo: { mode: "width", value: size } });
+      return { size, buffer: resvg.render().asPng() };
+    });
+
+    const header = Buffer.alloc(6);
+    header.writeUInt16LE(0, 0);
+    header.writeUInt16LE(1, 2);
+    header.writeUInt16LE(pngList.length, 4);
+
+    let offset = 6 + 16 * pngList.length;
+    const entries = [];
+    for (const item of pngList) {
+      const entry = Buffer.alloc(16);
+      entry.writeUInt8(item.size >= 256 ? 0 : item.size, 0);
+      entry.writeUInt8(item.size >= 256 ? 0 : item.size, 1);
+      entry.writeUInt8(0, 2);
+      entry.writeUInt8(0, 3);
+      entry.writeUInt16LE(1, 4);
+      entry.writeUInt16LE(32, 6);
+      entry.writeUInt32LE(item.buffer.length, 8);
+      entry.writeUInt32LE(offset, 12);
+      entries.push(entry);
+      offset += item.buffer.length;
+    }
+
+    const icoBuf = Buffer.concat([header, ...entries, ...pngList.map(i => i.buffer)]);
+    fs.writeFileSync(path.join(rootDir, "app.ico"), icoBuf);
+    fs.writeFileSync(path.join(rootDir, "app.rc"), '1 ICON "app.ico"\n');
+
+    // Compile app.syso if windres is available
+    try {
+      execSync(`windres -O coff -o "${path.join(rootDir, "app.syso")}" "${path.join(rootDir, "app.rc")}"`, {
+        cwd: rootDir,
+        stdio: "ignore"
+      });
+      console.log("Successfully compiled app.syso with windres.");
+    } catch {
+      console.log("Note: windres not available in PATH; using existing app.syso if present.");
+    }
+    console.log("Updated application icon from upstream binary.");
+  } catch (err) {
+    console.warn("Could not generate icon from extracted SVG:", err.message);
+  }
+}
+
 // Apply Windows polyfills & asset resolver to server.js
 console.log("Applying Windows compatibility patches to server.js...");
 const polyfill = `import * as __path from "node:path";

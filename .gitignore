@@ -10,3 +10,5 @@ drizzle-gateway-volume/
 
 *.exe
 
+
+node_modules/
