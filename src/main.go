@@ -40,18 +40,20 @@ func getAppIdentity() (title string, dirName string, port int, isEnhanced bool, 
 	return "Drizzle Gateway", "DrizzleGateway", defaultPort, false, exeBase
 }
 
-func initSubclass(hwnd uintptr, w webview.WebView, storeDir string, pNid *NOTIFYICONDATAW, exePath string, isMasterTray bool) {
+func initSubclass(hwnd uintptr, w webview.WebView, storeDir string, pNid *NOTIFYICONDATAW, exePath, exeBaseName, serverBinName string, isMasterTray bool) {
 	callback := syscall.NewCallback(func(h uintptr, msg uint32, wParam uintptr, lParam uintptr) uintptr {
 		switch msg {
 		case WM_SYSCOMMAND:
 			if (wParam & 0xFFF0) == SC_MINIMIZE {
 				saveWindowState(h, filepath.Base(filepath.Dir(storeDir)))
+				go trimAllGatewayMemory(exeBaseName, serverBinName)
 			}
 		case WM_CLOSE:
 			saveWindowState(h, filepath.Base(filepath.Dir(storeDir)))
 			if isMasterTray && !reallyQuit {
 				// Master window hides so the single tray launcher stays alive
 				procShowWindow.Call(h, SW_HIDE)
+				go trimAllGatewayMemory(exeBaseName, serverBinName)
 				return 0
 			}
 		case WM_TRAYICON:
@@ -132,10 +134,15 @@ func main() {
 	appTitle, dirName, port, isEnhanced, exeBase := getAppIdentity()
 
 	var targetConnection string
+	var isEmptyWindow bool
 	for i := 1; i < len(os.Args); i++ {
 		if (os.Args[i] == "--connection" || os.Args[i] == "-c") && i+1 < len(os.Args) {
 			targetConnection = os.Args[i+1]
-			break
+			i++
+			continue
+		}
+		if os.Args[i] == "--empty" || os.Args[i] == "--new" {
+			isEmptyWindow = true
 		}
 	}
 
@@ -160,6 +167,8 @@ func main() {
 	titleWithConn := appTitle
 	if targetConnection != "" {
 		titleWithConn = fmt.Sprintf("%s - %s", targetConnection, appTitle)
+	} else if isEmptyWindow {
+		titleWithConn = fmt.Sprintf("Connections - %s", appTitle)
 	}
 	w.SetTitle(titleWithConn)
 	w.SetSize(windowWidth, windowHeight, webview.HintNone)
@@ -169,7 +178,8 @@ func main() {
 	setWindowIcon(hwnd, hIcon)
 	applyImmersiveDarkModeAndMica(hwnd, isDark)
 
-	if !restoreWindowState(hwnd, dirName) {
+	restored, wasMaximized := restoreWindowState(hwnd, dirName)
+	if !restored {
 		centerWindow(hwnd, windowWidth, windowHeight)
 	}
 
@@ -186,14 +196,14 @@ func main() {
 		pNid = &nid
 	}
 
-	// Init Window subclass (No white menu bar!)
-	initSubclass(hwnd, w, storeDir, pNid, exePath, isMasterTray)
-
 	serverBin, err := serverBinaryPath(isEnhanced)
 	serverBinName := "DrizzleGatewayServer.exe"
 	if err == nil {
 		serverBinName = filepath.Base(serverBin)
 	}
+
+	// Init Window subclass (No white menu bar!)
+	initSubclass(hwnd, w, storeDir, pNid, exePath, exeBase, serverBinName, isMasterTray)
 
 	var (
 		serverCmd *exec.Cmd
@@ -267,8 +277,22 @@ func main() {
 			}
 		}
 
+		// Periodic gentle memory trimming (after 4s startup, then every 60s)
+		go func() {
+			time.Sleep(4 * time.Second)
+			trimAllGatewayMemory(exeBase, serverBinName)
+			ticker := time.NewTicker(60 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				trimAllGatewayMemory(exeBase, serverBinName)
+			}
+		}()
+
 		targetURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 		w.Dispatch(func() {
+			if wasMaximized {
+				procShowWindow.Call(hwnd, SW_SHOWMAXIMIZED)
+			}
 			w.Navigate(targetURL)
 			themePref := "light"
 			if isDark {
@@ -281,24 +305,99 @@ func main() {
 			`, themePref)
 
 			if targetConnection != "" {
+				connRaw := getStoredConnectionRaw(storeDir, targetConnection)
 				targetJson, _ := json.Marshal(targetConnection)
-				js += fmt.Sprintf(`
+				if connRaw != "" {
+					js += fmt.Sprintf(`
+						(function() {
+							const conn = %s;
+							const target = %s;
+							try {
+								const raw = localStorage.getItem('drizzle-gate');
+								const parsed = raw ? JSON.parse(raw) : { state: {} };
+								if (!parsed.state) parsed.state = {};
+								parsed.state.currentConnection = conn;
+								localStorage.setItem('drizzle-gate', JSON.stringify(parsed));
+							} catch(e) {}
+
+							let attempts = 0;
+							const timer = setInterval(() => {
+								attempts++;
+								const ds = document.querySelector('drizzle-studio');
+								if (ds && typeof ds.setCurrentConnection === 'function') {
+									ds.setCurrentConnection(conn);
+									clearInterval(timer);
+									return;
+								}
+								const all = Array.from(document.querySelectorAll('button, div, span, a'));
+								const match = all.find(el => el.textContent && el.textContent.trim() === target);
+								if (match) {
+									match.click();
+									clearInterval(timer);
+									return;
+								}
+								if (attempts > 35) {
+									clearInterval(timer);
+								}
+							}, 150);
+						})();
+					`, connRaw, string(targetJson))
+				} else {
+					js += fmt.Sprintf(`
+						(function() {
+							const target = %s;
+							let attempts = 0;
+							const timer = setInterval(() => {
+								attempts++;
+								const all = Array.from(document.querySelectorAll('button, div, span, a'));
+								const match = all.find(el => el.textContent && el.textContent.trim() === target);
+								if (match) {
+									match.click();
+									clearInterval(timer);
+								} else if (attempts > 35) {
+									clearInterval(timer);
+								}
+							}, 150);
+						})();
+					`, string(targetJson))
+				}
+			} else if (isEmptyWindow) {
+				// Clean Empty Window: reset currentConnection to null so the Connections Panel is displayed
+				js += `
 					(function() {
-						const target = %s;
+						try {
+							const raw = localStorage.getItem('drizzle-gate');
+							if (raw) {
+								const parsed = JSON.parse(raw);
+								if (parsed && parsed.state) {
+									parsed.state.currentConnection = null;
+									localStorage.setItem('drizzle-gate', JSON.stringify(parsed));
+								}
+							}
+						} catch(e) {}
+
 						let attempts = 0;
 						const timer = setInterval(() => {
 							attempts++;
-							const all = Array.from(document.querySelectorAll('button, div, span, a'));
-							const match = all.find(el => el.textContent && el.textContent.trim() === target);
-							if (match) {
-								match.click();
+							const ds = document.querySelector('drizzle-studio');
+							if (ds && typeof ds.setCurrentConnection === 'function') {
+								ds.setCurrentConnection(null);
 								clearInterval(timer);
-							} else if (attempts > 35) {
+								return;
+							}
+							const all = Array.from(document.querySelectorAll('button, div, span, a'));
+							const backBtn = all.find(el => el.textContent && el.textContent.trim() === 'Back to connections');
+							if (backBtn) {
+								backBtn.click();
+								clearInterval(timer);
+								return;
+							}
+							if (attempts > 40) {
 								clearInterval(timer);
 							}
-						}, 150);
+						}, 100);
 					})();
-				`, string(targetJson))
+				`
 			}
 			w.Eval(js)
 		})

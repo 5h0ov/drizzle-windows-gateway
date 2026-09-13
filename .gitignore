@@ -17,3 +17,9 @@ node_modules/
 app.ico
 app.rc
 app.syso
+
+*.exe~
+
+src/*.ico
+src/*.rc
+src/*.syso

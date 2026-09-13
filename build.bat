@@ -29,7 +29,7 @@ if not exist "app.syso" (
 )
 
 echo [1/2] Compiling native Windows binary...
-go build -ldflags="-H windowsgui -s -w" -o DrizzleGateway.exe .
+go build -ldflags="-H windowsgui -s -w" -o DrizzleGateway.exe ./src
 if %ERRORLEVEL% NEQ 0 (
     echo.
     echo [ERROR] Build failed! Please inspect the error messages above.

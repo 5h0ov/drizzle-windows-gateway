@@ -56,3 +56,26 @@ func getStoredConnections(storeDir string) []StoredSlot {
 	}
 	return list
 }
+
+func getStoredConnectionRaw(storeDir string, targetName string) string {
+	filePath := filepath.Join(storeDir, "store.json")
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return ""
+	}
+	var raw struct {
+		Slots [][]json.RawMessage `json:"slots"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return ""
+	}
+	for _, pair := range raw.Slots {
+		if len(pair) >= 2 {
+			var slot StoredSlot
+			if err := json.Unmarshal(pair[1], &slot); err == nil && slot.Name == targetName {
+				return string(pair[1])
+			}
+		}
+	}
+	return ""
+}

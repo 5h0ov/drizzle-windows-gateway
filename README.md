@@ -2,7 +2,7 @@
 
 [![Release](https://img.shields.io/github/v/release/5h0ov/drizzle-windows-gateway?color=blue&label=Release)](https://github.com/5h0ov/drizzle-windows-gateway/releases/latest)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20x64-0078D6?logo=windows)](https://github.com/5h0ov/drizzle-windows-gateway/releases/latest)
-[![RAM Usage](https://img.shields.io/badge/RAM-~430%20MB%20(vs%202%20GB%20WSL)-brightgreen)](#)
+[![RAM Usage](https://img.shields.io/badge/RAM-~150--250%20MB%20(vs%202%20GB%20WSL)-brightgreen)](#)
 
 [Drizzle Gateway](https://gateway.drizzle.team) is officially distributed as Linux binaries and Docker images. Running it on Windows traditionally requires WSL2 or Docker Desktop, permanently consuming 1.5–2 GB of background RAM (`VmmemWSL`).
 
@@ -21,6 +21,7 @@ Grab the standalone executable package from GitHub Releases:
 ## Highlights
 
 * **100% Native (Zero WSL / Zero Docker):** Runs directly as native Windows processes. Drops to **0 MB RAM** immediately when closed.
+* **Low Memory Footprint:** Consumes ~150–250 MB under active database usage (compared to 1.5–2 GB on WSL2 / Docker Desktop), dropping down to ~35 MB when idle in the background tray via Win32 working-set trimming.
 * **System Tray Quick-Launcher:** Stays in your taskbar notification area. Right-click to launch any saved database connection (`PostgreSQL`, `MySQL`, `SQLite`, `LibSQL`) into a dedicated window.
 * **Multi-Window Support:** Open multiple database windows concurrently. All instances share a single backend daemon to minimize memory.
 * **Session & State Persistence:**

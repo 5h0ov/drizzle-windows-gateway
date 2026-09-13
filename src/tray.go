@@ -92,7 +92,7 @@ func showTrayContextMenu(hwnd uintptr, w webview.WebView, storeDir string, pNid 
 	)
 
 	if cmd == ID_TRAY_NEW {
-		_ = exec.Command(exePath).Start()
+		_ = exec.Command(exePath, "--empty").Start()
 	} else if cmd == ID_TRAY_QUIT {
 		procShell_NotifyIconW.Call(NIM_DELETE, uintptr(unsafe.Pointer(pNid)))
 		saveWindowState(hwnd, filepath.Base(filepath.Dir(storeDir)))

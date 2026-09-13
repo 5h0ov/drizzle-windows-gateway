@@ -226,7 +226,7 @@ execSync(`bun build "${patchedServerPath}" --compile --outfile "${serverExeOut}"
 
 // Compile DrizzleGateway.exe with Go
 console.log("Compiling DrizzleGateway.exe with Go...");
-execSync(`go build -ldflags="-H windowsgui -s -w" -o "${path.join(rootDir, "DrizzleGateway.exe")}" .`, {
+execSync(`go build -ldflags="-H windowsgui -s -w" -o "${path.join(rootDir, "DrizzleGateway.exe")}" ./src`, {
   cwd: rootDir,
   stdio: "inherit"
 });

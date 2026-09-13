@@ -60,6 +60,8 @@ var (
 
 	modUser32               = syscall.NewLazyDLL("user32.dll")
 	procGetSystemMetrics    = modUser32.NewProc("GetSystemMetrics")
+	procGetWindowPlacement  = modUser32.NewProc("GetWindowPlacement")
+	procSetWindowPlacement  = modUser32.NewProc("SetWindowPlacement")
 	procSetWindowPos        = modUser32.NewProc("SetWindowPos")
 	procLoadIconW           = modUser32.NewProc("LoadIconW")
 	procSendMessageW        = modUser32.NewProc("SendMessageW")
@@ -79,6 +81,10 @@ var (
 	modShell32                                  = syscall.NewLazyDLL("shell32.dll")
 	procShell_NotifyIconW                       = modShell32.NewProc("Shell_NotifyIconW")
 	procSetCurrentProcessExplicitAppUserModelID = modShell32.NewProc("SetCurrentProcessExplicitAppUserModelID")
+
+	modPsapi            = syscall.NewLazyDLL("psapi.dll")
+	procEmptyWorkingSet = modPsapi.NewProc("EmptyWorkingSet")
+	procOpenProcess     = modKernel32.NewProc("OpenProcess")
 )
 
 type PROCESSENTRY32W struct {
@@ -101,6 +107,15 @@ type RECT struct {
 type POINT struct {
 	X, Y int32
 }
+type WINDOWPLACEMENT struct {
+	Length           uint32
+	Flags            uint32
+	ShowCmd          uint32
+	PtMinPosition    POINT
+	PtMaxPosition    POINT
+	RcNormalPosition RECT
+}
+
 
 func countGatewayWindows(exeBaseName string) int {
 	snap, _, _ := procCreateToolhelp32Snapshot.Call(0x00000002, 0)
@@ -203,4 +218,56 @@ func applyImmersiveDarkModeAndMica(hwnd uintptr, isDark bool) {
 	// Mica material (Windows 11)
 	var backdrop int32 = 2
 	procDwmSetWindowAttribute.Call(hwnd, 38, uintptr(unsafe.Pointer(&backdrop)), 4)
+}
+
+const (
+	PROCESS_SET_QUOTA         = 0x0100
+	PROCESS_QUERY_INFORMATION = 0x0400
+)
+
+func trimProcessMemory(pid uint32) {
+	hProc, _, _ := procOpenProcess.Call(PROCESS_SET_QUOTA|PROCESS_QUERY_INFORMATION, 0, uintptr(pid))
+	if hProc != 0 {
+		procEmptyWorkingSet.Call(hProc)
+		procCloseHandle.Call(hProc)
+	}
+}
+
+func trimAllGatewayMemory(exeBaseName, serverBaseName string) {
+	currentPid := uint32(syscall.Getpid())
+	trimProcessMemory(currentPid)
+
+	snap, _, _ := procCreateToolhelp32Snapshot.Call(0x00000002, 0)
+	if snap == uintptr(syscall.InvalidHandle) {
+		return
+	}
+	defer procCloseHandle.Call(snap)
+
+	var entry PROCESSENTRY32W
+	entry.DwSize = uint32(unsafe.Sizeof(entry))
+
+	relatedPids := map[uint32]bool{currentPid: true}
+	var allEntries []PROCESSENTRY32W
+
+	ret, _, _ := procProcess32FirstW.Call(snap, uintptr(unsafe.Pointer(&entry)))
+	for ret != 0 {
+		allEntries = append(allEntries, entry)
+		ret, _, _ = procProcess32NextW.Call(snap, uintptr(unsafe.Pointer(&entry)))
+	}
+
+	// Discover child and grandchild WebView2 processes of this gateway
+	for pass := 0; pass < 3; pass++ {
+		for _, e := range allEntries {
+			if relatedPids[e.Th32ParentProcessID] {
+				relatedPids[e.Th32ProcessID] = true
+			}
+		}
+	}
+
+	for _, e := range allEntries {
+		name := syscall.UTF16ToString(e.SzExeFile[:])
+		if strings.EqualFold(name, serverBaseName) || strings.EqualFold(name, exeBaseName) || relatedPids[e.Th32ProcessID] {
+			trimProcessMemory(e.Th32ProcessID)
+		}
+	}
 }
