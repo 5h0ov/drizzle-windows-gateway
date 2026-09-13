@@ -3,18 +3,18 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 	"unsafe"
 
-	"github.com/webview/webview_go"
+	webview "github.com/webview/webview_go"
 )
 
 const (
@@ -28,14 +28,75 @@ const (
 var (
 	modDwmapi                 = syscall.NewLazyDLL("dwmapi.dll")
 	procDwmSetWindowAttribute = modDwmapi.NewProc("DwmSetWindowAttribute")
-	modAdvapi32               = syscall.NewLazyDLL("advapi32.dll")
-	procRegOpenKeyExW         = modAdvapi32.NewProc("RegOpenKeyExW")
-	procRegQueryValueExW      = modAdvapi32.NewProc("RegQueryValueExW")
-	procRegCloseKey           = modAdvapi32.NewProc("RegCloseKey")
-	modUser32                 = syscall.NewLazyDLL("user32.dll")
-	procGetSystemMetrics      = modUser32.NewProc("GetSystemMetrics")
-	procSetWindowPos          = modUser32.NewProc("SetWindowPos")
+
+	modAdvapi32          = syscall.NewLazyDLL("advapi32.dll")
+	procRegOpenKeyExW    = modAdvapi32.NewProc("RegOpenKeyExW")
+	procRegQueryValueExW = modAdvapi32.NewProc("RegQueryValueExW")
+	procRegCloseKey      = modAdvapi32.NewProc("RegCloseKey")
+
+	modKernel32                  = syscall.NewLazyDLL("kernel32.dll")
+	procGetModuleHandleW         = modKernel32.NewProc("GetModuleHandleW")
+	procCreateToolhelp32Snapshot = modKernel32.NewProc("CreateToolhelp32Snapshot")
+	procProcess32FirstW          = modKernel32.NewProc("Process32FirstW")
+	procProcess32NextW           = modKernel32.NewProc("Process32NextW")
+	procCloseHandle              = modKernel32.NewProc("CloseHandle")
+
+	modUser32            = syscall.NewLazyDLL("user32.dll")
+	procGetSystemMetrics = modUser32.NewProc("GetSystemMetrics")
+	procSetWindowPos     = modUser32.NewProc("SetWindowPos")
+	procLoadIconW        = modUser32.NewProc("LoadIconW")
+	procSendMessageW     = modUser32.NewProc("SendMessageW")
+
+	modShell32                                  = syscall.NewLazyDLL("shell32.dll")
+	procSetCurrentProcessExplicitAppUserModelID = modShell32.NewProc("SetCurrentProcessExplicitAppUserModelID")
 )
+
+type PROCESSENTRY32W struct {
+	DwSize              uint32
+	CntUsage            uint32
+	Th32ProcessID       uint32
+	Th32DefaultHeapID   uintptr
+	Th32ModuleID        uint32
+	CntThreads          uint32
+	Th32ParentProcessID uint32
+	PcPriClassBase      int32
+	DwFlags             uint32
+	SzExeFile           [260]uint16
+}
+
+func countGatewayWindows() int {
+	snap, _, _ := procCreateToolhelp32Snapshot.Call(0x00000002, 0) // TH32CS_SNAPPROCESS
+	if snap == uintptr(syscall.InvalidHandle) {
+		return 1
+	}
+	defer procCloseHandle.Call(snap)
+
+	var entry PROCESSENTRY32W
+	entry.DwSize = uint32(unsafe.Sizeof(entry))
+
+	ret, _, _ := procProcess32FirstW.Call(snap, uintptr(unsafe.Pointer(&entry)))
+	count := 0
+	for ret != 0 {
+		exeName := syscall.UTF16ToString(entry.SzExeFile[:])
+		if strings.EqualFold(exeName, "DrizzleGateway.exe") {
+			count++
+		}
+		ret, _, _ = procProcess32NextW.Call(snap, uintptr(unsafe.Pointer(&entry)))
+	}
+	return count
+}
+
+func setWindowIcon(hwnd uintptr) {
+	hInst, _, _ := procGetModuleHandleW.Call(0)
+	hIcon, _, _ := procLoadIconW.Call(hInst, uintptr(1))
+	if hIcon != 0 {
+		const WM_SETICON = 0x0080
+		const ICON_SMALL = 0
+		const ICON_BIG = 1
+		procSendMessageW.Call(hwnd, WM_SETICON, ICON_SMALL, hIcon)
+		procSendMessageW.Call(hwnd, WM_SETICON, ICON_BIG, hIcon)
+	}
+}
 
 func centerWindow(hwnd uintptr, width, height int) {
 	screenWidth, _, _ := procGetSystemMetrics.Call(0)  // SM_CXSCREEN
@@ -120,7 +181,6 @@ func serverBinaryPath() (string, error) {
 	if _, err := os.Stat(candidate); err == nil {
 		return candidate, nil
 	}
-	// Fallback to current working directory
 	if _, err := os.Stat("DrizzleGatewayServer.exe"); err == nil {
 		abs, _ := filepath.Abs("DrizzleGatewayServer.exe")
 		return abs, nil
@@ -128,18 +188,26 @@ func serverBinaryPath() (string, error) {
 	return "", fmt.Errorf("DrizzleGatewayServer.exe not found alongside DrizzleGateway.exe")
 }
 
-func freePort() int {
-	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", defaultPort))
+func isHealthy(port int) bool {
+	url := fmt.Sprintf("http://127.0.0.1:%d/health", port)
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	resp, err := client.Get(url)
 	if err == nil {
-		defer l.Close()
-		return defaultPort
+		resp.Body.Close()
+		return resp.StatusCode == 200
 	}
-	l2, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return defaultPort
+	return false
+}
+
+func waitHealthy(port int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if isHealthy(port) {
+			return true
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
-	defer l2.Close()
-	return l2.Addr().(*net.TCPAddr).Port
+	return false
 }
 
 func startServer(serverBin string, port int, storeDir string) (*exec.Cmd, error) {
@@ -156,29 +224,10 @@ func startServer(serverBin string, port int, storeDir string) (*exec.Cmd, error)
 	return cmd, nil
 }
 
-func stopServer(cmd *exec.Cmd) {
+func stopAllServers() {
 	killCmd := exec.Command("taskkill", "/F", "/T", "/IM", "DrizzleGatewayServer.exe")
 	killCmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000} // CREATE_NO_WINDOW
 	_ = killCmd.Run()
-	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-	}
-}
-
-func waitHealthy(port int, timeout time.Duration) bool {
-	url := fmt.Sprintf("http://127.0.0.1:%d/health", port)
-	client := &http.Client{Timeout: 1000 * time.Millisecond}
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		resp, err := client.Get(url)
-		if err == nil {
-			resp.Body.Close()
-			return true
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	return false
 }
 
 func getLoadingHTML(isDark bool, message string) string {
@@ -236,9 +285,12 @@ func getLoadingHTML(isDark bool, message string) string {
 }
 
 func main() {
+	if procSetCurrentProcessExplicitAppUserModelID.Find() == nil {
+		appID, _ := syscall.UTF16PtrFromString("Drizzle.Gateway.Windows")
+		procSetCurrentProcessExplicitAppUserModelID.Call(uintptr(unsafe.Pointer(appID)))
+	}
+
 	isDark := isWindowsDarkMode()
-	// Persist all user state (opened tables, query tabs, filters, localStorage, cookies)
-	// inside standard Windows %APPDATA%\DrizzleGateway\webview2
 	wvDir := filepath.Join(filepath.Dir(appDataDir()), "webview2")
 	_ = os.MkdirAll(wvDir, 0o755)
 	_ = os.Setenv("WEBVIEW2_USER_DATA_FOLDER", wvDir)
@@ -250,20 +302,11 @@ func main() {
 	w.SetSize(windowWidth, windowHeight, webview.HintNone)
 
 	hwnd := uintptr(w.Window())
+	setWindowIcon(hwnd)
 	applyImmersiveDarkMode(hwnd, isDark)
 	centerWindow(hwnd, windowWidth, windowHeight)
 
-	serverBin, err := serverBinaryPath()
-	if err != nil {
-		errMsg, _ := json.Marshal(err.Error())
-		w.SetHtml(getLoadingHTML(isDark, fmt.Sprintf("Error: %s", string(errMsg))))
-		w.Run()
-		return
-	}
-
-	w.SetHtml(getLoadingHTML(isDark, "Starting Drizzle Gateway..."))
-
-	port := freePort()
+	port := defaultPort
 	storeDir := appDataDir()
 
 	var (
@@ -280,10 +323,17 @@ func main() {
 			return
 		}
 		cleaned = true
-		cmdMu.Lock()
-		cmd := serverCmd
-		cmdMu.Unlock()
-		stopServer(cmd)
+
+		if countGatewayWindows() <= 1 {
+			cmdMu.Lock()
+			cmd := serverCmd
+			cmdMu.Unlock()
+			if cmd != nil && cmd.Process != nil {
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+			}
+			stopAllServers()
+		}
 	}
 	defer cleanupOnce()
 
@@ -295,39 +345,52 @@ func main() {
 		os.Exit(0)
 	}()
 
-	go func() {
-		cmd, err := startServer(serverBin, port, storeDir)
-		if err != nil {
-			w.Dispatch(func() {
-				w.SetHtml(getLoadingHTML(isDark, fmt.Sprintf("Failed to launch daemon: %v", err)))
-			})
-			return
-		}
-		cmdMu.Lock()
-		serverCmd = cmd
-		cmdMu.Unlock()
+	serverBin, err := serverBinaryPath()
+	if err != nil && !isHealthy(port) {
+		errMsg, _ := json.Marshal(err.Error())
+		w.SetHtml(getLoadingHTML(isDark, fmt.Sprintf("Error: %s", string(errMsg))))
+		w.Run()
+		return
+	}
 
-		if waitHealthy(port, healthTimeout) {
-			targetURL := fmt.Sprintf("http://127.0.0.1:%d", port)
-			w.Dispatch(func() {
-				w.Navigate(targetURL)
-				themePref := "light"
-				if isDark {
-					themePref = "dark"
-				}
-				js := fmt.Sprintf(`
-					if (!localStorage.getItem('theme')) {
-						localStorage.setItem('theme', '%s');
-					}
-				`, themePref)
-				w.Eval(js)
-			})
-		} else {
-			cleanupOnce()
-			w.Dispatch(func() {
-				w.SetHtml(getLoadingHTML(isDark, "Drizzle Gateway timed out while starting."))
-			})
+	w.SetHtml(getLoadingHTML(isDark, "Starting Drizzle Gateway..."))
+
+	go func() {
+		if !isHealthy(port) {
+			cmd, err := startServer(serverBin, port, storeDir)
+			if err != nil {
+				w.Dispatch(func() {
+					w.SetHtml(getLoadingHTML(isDark, fmt.Sprintf("Failed to launch daemon: %v", err)))
+				})
+				return
+			}
+			cmdMu.Lock()
+			serverCmd = cmd
+			cmdMu.Unlock()
+
+			if !waitHealthy(port, healthTimeout) {
+				cleanupOnce()
+				w.Dispatch(func() {
+					w.SetHtml(getLoadingHTML(isDark, "Drizzle Gateway timed out while starting."))
+				})
+				return
+			}
 		}
+
+		targetURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+		w.Dispatch(func() {
+			w.Navigate(targetURL)
+			themePref := "light"
+			if isDark {
+				themePref = "dark"
+			}
+			js := fmt.Sprintf(`
+				if (!localStorage.getItem('theme')) {
+					localStorage.setItem('theme', '%s');
+				}
+			`, themePref)
+			w.Eval(js)
+		})
 	}()
 
 	w.Run()
