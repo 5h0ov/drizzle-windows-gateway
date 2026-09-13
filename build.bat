@@ -21,6 +21,13 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
+:: Compile Windows icon resource if needed
+if not exist "app.syso" (
+    if exist "app.rc" (
+        where windres >nul 2>nul && windres -O coff -o app.syso app.rc
+    )
+)
+
 echo [1/2] Compiling native Windows binary...
 go build -ldflags="-H windowsgui -s -w" -o DrizzleGateway.exe .
 if %ERRORLEVEL% NEQ 0 (
@@ -41,3 +48,4 @@ echo.
 echo You can now double-click DrizzleGateway.exe to launch.
 echo.
 pause
+

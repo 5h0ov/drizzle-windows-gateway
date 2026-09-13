@@ -12,3 +12,8 @@ drizzle-gateway-volume/
 
 
 node_modules/
+
+# Generated icon & resource build artifacts
+app.ico
+app.rc
+app.syso

@@ -18,7 +18,6 @@ import (
 )
 
 const (
-	appName       = "Drizzle Gateway"
 	defaultPort   = 4983
 	windowWidth   = 1180
 	windowHeight  = 760
@@ -64,7 +63,19 @@ type PROCESSENTRY32W struct {
 	SzExeFile           [260]uint16
 }
 
-func countGatewayWindows() int {
+func getAppIdentity() (title string, dirName string, port int, isEnhanced bool, exeBaseName string) {
+	exe, err := os.Executable()
+	exeBase := "DrizzleGateway.exe"
+	if err == nil {
+		exeBase = filepath.Base(exe)
+	}
+	if strings.Contains(strings.ToLower(exeBase), "enhanced") {
+		return "Drizzle Gateway (Enhanced)", "DrizzleGateway-Enhanced", 4984, true, exeBase
+	}
+	return "Drizzle Gateway", "DrizzleGateway", defaultPort, false, exeBase
+}
+
+func countGatewayWindows(exeBaseName string) int {
 	snap, _, _ := procCreateToolhelp32Snapshot.Call(0x00000002, 0) // TH32CS_SNAPPROCESS
 	if snap == uintptr(syscall.InvalidHandle) {
 		return 1
@@ -77,8 +88,8 @@ func countGatewayWindows() int {
 	ret, _, _ := procProcess32FirstW.Call(snap, uintptr(unsafe.Pointer(&entry)))
 	count := 0
 	for ret != 0 {
-		exeName := syscall.UTF16ToString(entry.SzExeFile[:])
-		if strings.EqualFold(exeName, "DrizzleGateway.exe") {
+		name := syscall.UTF16ToString(entry.SzExeFile[:])
+		if strings.EqualFold(name, exeBaseName) {
 			count++
 		}
 		ret, _, _ = procProcess32NextW.Call(snap, uintptr(unsafe.Pointer(&entry)))
@@ -160,32 +171,43 @@ func applyImmersiveDarkMode(hwnd uintptr, isDark bool) {
 	procDwmSetWindowAttribute.Call(hwnd, 19, uintptr(unsafe.Pointer(&val)), 4)
 }
 
-func appDataDir() string {
+func appDataDir(dirName string) string {
 	appData := os.Getenv("APPDATA")
 	if appData == "" {
 		home, _ := os.UserHomeDir()
 		appData = filepath.Join(home, "AppData", "Roaming")
 	}
-	dir := filepath.Join(appData, "DrizzleGateway", "data")
+	dir := filepath.Join(appData, dirName, "data")
 	_ = os.MkdirAll(dir, 0o755)
 	return dir
 }
 
-func serverBinaryPath() (string, error) {
+func serverBinaryPath(isEnhanced bool) (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err
 	}
 	dir := filepath.Dir(exe)
-	candidate := filepath.Join(dir, "DrizzleGatewayServer.exe")
+
+	candidateName := "DrizzleGatewayServer.exe"
+	if isEnhanced {
+		candidateName = "DrizzleGatewayServer-Enhanced.exe"
+	}
+
+	candidate := filepath.Join(dir, candidateName)
 	if _, err := os.Stat(candidate); err == nil {
 		return candidate, nil
 	}
-	if _, err := os.Stat("DrizzleGatewayServer.exe"); err == nil {
-		abs, _ := filepath.Abs("DrizzleGatewayServer.exe")
+	// Fallback to standard server if enhanced specific not found
+	standardCandidate := filepath.Join(dir, "DrizzleGatewayServer.exe")
+	if _, err := os.Stat(standardCandidate); err == nil {
+		return standardCandidate, nil
+	}
+	if _, err := os.Stat(candidateName); err == nil {
+		abs, _ := filepath.Abs(candidateName)
 		return abs, nil
 	}
-	return "", fmt.Errorf("DrizzleGatewayServer.exe not found alongside DrizzleGateway.exe")
+	return "", fmt.Errorf("DrizzleGatewayServer.exe not found alongside executable")
 }
 
 func isHealthy(port int) bool {
@@ -224,8 +246,8 @@ func startServer(serverBin string, port int, storeDir string) (*exec.Cmd, error)
 	return cmd, nil
 }
 
-func stopAllServers() {
-	killCmd := exec.Command("taskkill", "/F", "/T", "/IM", "DrizzleGatewayServer.exe")
+func stopServers(serverBinName string) {
+	killCmd := exec.Command("taskkill", "/F", "/T", "/IM", serverBinName)
 	killCmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000} // CREATE_NO_WINDOW
 	_ = killCmd.Run()
 }
@@ -285,20 +307,27 @@ func getLoadingHTML(isDark bool, message string) string {
 }
 
 func main() {
+	appTitle, dirName, port, isEnhanced, exeBase := getAppIdentity()
+
 	if procSetCurrentProcessExplicitAppUserModelID.Find() == nil {
-		appID, _ := syscall.UTF16PtrFromString("Drizzle.Gateway.Windows")
+		appIDStr := "Drizzle.Gateway.Windows"
+		if isEnhanced {
+			appIDStr = "Drizzle.Gateway.Windows.Enhanced"
+		}
+		appID, _ := syscall.UTF16PtrFromString(appIDStr)
 		procSetCurrentProcessExplicitAppUserModelID.Call(uintptr(unsafe.Pointer(appID)))
 	}
 
 	isDark := isWindowsDarkMode()
-	wvDir := filepath.Join(filepath.Dir(appDataDir()), "webview2")
+	storeDir := appDataDir(dirName)
+	wvDir := filepath.Join(filepath.Dir(storeDir), "webview2")
 	_ = os.MkdirAll(wvDir, 0o755)
 	_ = os.Setenv("WEBVIEW2_USER_DATA_FOLDER", wvDir)
 
 	w := webview.New(false)
 	defer w.Destroy()
 
-	w.SetTitle(appName)
+	w.SetTitle(appTitle)
 	w.SetSize(windowWidth, windowHeight, webview.HintNone)
 
 	hwnd := uintptr(w.Window())
@@ -306,8 +335,11 @@ func main() {
 	applyImmersiveDarkMode(hwnd, isDark)
 	centerWindow(hwnd, windowWidth, windowHeight)
 
-	port := defaultPort
-	storeDir := appDataDir()
+	serverBin, err := serverBinaryPath(isEnhanced)
+	serverBinName := "DrizzleGatewayServer.exe"
+	if err == nil {
+		serverBinName = filepath.Base(serverBin)
+	}
 
 	var (
 		serverCmd *exec.Cmd
@@ -324,7 +356,7 @@ func main() {
 		}
 		cleaned = true
 
-		if countGatewayWindows() <= 1 {
+		if countGatewayWindows(exeBase) <= 1 {
 			cmdMu.Lock()
 			cmd := serverCmd
 			cmdMu.Unlock()
@@ -332,7 +364,7 @@ func main() {
 				_ = cmd.Process.Kill()
 				_ = cmd.Wait()
 			}
-			stopAllServers()
+			stopServers(serverBinName)
 		}
 	}
 	defer cleanupOnce()
@@ -345,7 +377,6 @@ func main() {
 		os.Exit(0)
 	}()
 
-	serverBin, err := serverBinaryPath()
 	if err != nil && !isHealthy(port) {
 		errMsg, _ := json.Marshal(err.Error())
 		w.SetHtml(getLoadingHTML(isDark, fmt.Sprintf("Error: %s", string(errMsg))))
@@ -353,7 +384,7 @@ func main() {
 		return
 	}
 
-	w.SetHtml(getLoadingHTML(isDark, "Starting Drizzle Gateway..."))
+	w.SetHtml(getLoadingHTML(isDark, fmt.Sprintf("Starting %s...", appTitle)))
 
 	go func() {
 		if !isHealthy(port) {
@@ -371,7 +402,7 @@ func main() {
 			if !waitHealthy(port, healthTimeout) {
 				cleanupOnce()
 				w.Dispatch(func() {
-					w.SetHtml(getLoadingHTML(isDark, "Drizzle Gateway timed out while starting."))
+					w.SetHtml(getLoadingHTML(isDark, fmt.Sprintf("%s timed out while starting.", appTitle)))
 				})
 				return
 			}
