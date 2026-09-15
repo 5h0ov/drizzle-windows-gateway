@@ -77,9 +77,26 @@ func showTrayContextMenu(hwnd uintptr, w webview.WebView, storeDir string, pNid 
 	procAppendMenuW.Call(hMenu, MF_SEPARATOR, 0, 0)
 	procAppendMenuW.Call(hMenu, MF_STRING, ID_TRAY_QUIT, uintptr(unsafe.Pointer(quitStr)))
 
+	// Create a temporary hidden dummy window so TrackPopupMenu captures focus and dismisses
+	// properly without raising or activating the main Drizzle window when it is in the background.
+	staticClass, _ := syscall.UTF16PtrFromString("STATIC")
+	hDummy, _, _ := procCreateWindowExW.Call(
+		0,
+		uintptr(unsafe.Pointer(staticClass)),
+		0,
+		0,
+		0, 0, 0, 0,
+		0, 0, 0, 0,
+	)
+	menuOwner := hwnd
+	if hDummy != 0 {
+		defer procDestroyWindow.Call(hDummy)
+		menuOwner = hDummy
+	}
+
 	var pt POINT
 	procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
-	procSetForegroundWindow.Call(hwnd)
+	procSetForegroundWindow.Call(menuOwner)
 
 	cmd, _, _ := procTrackPopupMenu.Call(
 		hMenu,
@@ -87,9 +104,10 @@ func showTrayContextMenu(hwnd uintptr, w webview.WebView, storeDir string, pNid 
 		uintptr(pt.X),
 		uintptr(pt.Y),
 		0,
-		hwnd,
+		menuOwner,
 		0,
 	)
+	procPostMessageW.Call(menuOwner, 0, 0, 0)
 
 	if cmd == ID_TRAY_NEW {
 		_ = exec.Command(exePath, "--empty").Start()

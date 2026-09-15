@@ -78,6 +78,9 @@ var (
 	procTrackPopupMenu      = modUser32.NewProc("TrackPopupMenu")
 	procDestroyMenu         = modUser32.NewProc("DestroyMenu")
 	procGetCursorPos        = modUser32.NewProc("GetCursorPos")
+	procCreateWindowExW     = modUser32.NewProc("CreateWindowExW")
+	procDestroyWindow       = modUser32.NewProc("DestroyWindow")
+	procPostMessageW        = modUser32.NewProc("PostMessageW")
 
 	modShell32                                  = syscall.NewLazyDLL("shell32.dll")
 	procShell_NotifyIconW                       = modShell32.NewProc("Shell_NotifyIconW")
