@@ -23,3 +23,6 @@ app.syso
 src/*.ico
 src/*.rc
 src/*.syso
+
+# Local preview files
+preview_*.html
