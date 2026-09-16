@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" class="%s">
+<html lang="en" class="{{THEME}}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -159,25 +159,6 @@
         width: 30%;
       }
     }
-
-    /* Preview toggle button */
-    .preview-toggle {
-      position: fixed;
-      bottom: 16px;
-      right: 16px;
-      padding: 6px 12px;
-      font-size: 12px;
-      background: rgba(128, 128, 128, 0.15);
-      border: 1px solid rgba(128, 128, 128, 0.25);
-      border-radius: 6px;
-      color: inherit;
-      cursor: pointer;
-      opacity: 0.6;
-      transition: opacity 0.15s;
-    }
-    .preview-toggle:hover {
-      opacity: 1;
-    }
   </style>
 </head>
 <body>
@@ -194,13 +175,11 @@
     </div>
     <h2 class="title">Drizzle Gateway</h2>
     <div class="status-container">
-      <span class="status-text">%s</span>
+      <span class="status-text">{{MESSAGE}}</span>
     </div>
     <div class="progress-track">
       <div class="progress-bar"></div>
     </div>
   </div>
-
-  <button class="preview-toggle" onclick="document.documentElement.classList.toggle('dark')">Toggle Dark / Light</button>
 </body>
 </html>

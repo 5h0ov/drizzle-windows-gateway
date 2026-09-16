@@ -3,6 +3,7 @@ package main
 import (
 	_ "embed"
 	"fmt"
+	"strings"
 )
 
 //go:embed inject/ui/theme.js
@@ -25,7 +26,9 @@ func getLoadingHTML(isDark bool, message string) string {
 	if isDark {
 		themeClass = "dark"
 	}
-	return fmt.Sprintf(loadingHTMLTemplate, themeClass, message)
+	html := strings.ReplaceAll(loadingHTMLTemplate, "{{THEME}}", themeClass)
+	html = strings.ReplaceAll(html, "{{MESSAGE}}", message)
+	return html
 }
 
 func buildInitScript(initConnJSON string, initEmpty bool, isDark bool) string {
