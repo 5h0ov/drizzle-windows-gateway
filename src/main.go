@@ -40,7 +40,7 @@ func getAppIdentity() (title string, dirName string, port int, isEnhanced bool, 
 	return "Drizzle Gateway", "DrizzleGateway", defaultPort, false, exeBase
 }
 
-func initSubclass(hwnd uintptr, w webview.WebView, storeDir string, pNid *NOTIFYICONDATAW, exePath, exeBaseName, serverBinName string, isMasterTray bool) {
+func initSubclass(hwnd uintptr, w webview.WebView, storeDir string, pNid *NOTIFYICONDATAW, exePath, exeBaseName, serverBinName string, isMasterTray bool, serverPort int) {
 	callback := syscall.NewCallback(func(h uintptr, msg uint32, wParam uintptr, lParam uintptr) uintptr {
 		switch msg {
 		case WM_SYSCOMMAND:
@@ -64,7 +64,7 @@ func initSubclass(hwnd uintptr, w webview.WebView, storeDir string, pNid *NOTIFY
 				procSetForegroundWindow.Call(h)
 				return 0
 			case WM_RBUTTONUP:
-				showTrayContextMenu(h, w, storeDir, pNid, exePath, serverBinName)
+				showTrayContextMenu(h, w, storeDir, pNid, exePath, serverBinName, serverPort)
 				return 0
 			}
 		}
@@ -77,10 +77,12 @@ func initSubclass(hwnd uintptr, w webview.WebView, storeDir string, pNid *NOTIFY
 }
 
 func main() {
+	initJobObject()
 	appTitle, dirName, port, isEnhanced, exeBase := getAppIdentity()
 
 	var targetConnection string
 	var isEmptyWindow bool
+	var isMobileWindow bool
 	for i := 1; i < len(os.Args); i++ {
 		if (os.Args[i] == "--connection" || os.Args[i] == "-c") && i+1 < len(os.Args) {
 			targetConnection = os.Args[i+1]
@@ -90,6 +92,14 @@ func main() {
 		if os.Args[i] == "--empty" || os.Args[i] == "--new" {
 			isEmptyWindow = true
 		}
+		if os.Args[i] == "--mobile" || os.Args[i] == "--pair" {
+			isMobileWindow = true
+		}
+	}
+
+	if isMobileWindow {
+		runMobilePairingWindow(appTitle, dirName, port, isEnhanced)
+		return
 	}
 
 	if procSetCurrentProcessExplicitAppUserModelID.Find() == nil {
@@ -162,7 +172,7 @@ func main() {
 	}
 
 	// Init Window subclass (No white menu bar!)
-	initSubclass(hwnd, w, storeDir, pNid, exePath, exeBase, serverBinName, isMasterTray)
+	initSubclass(hwnd, w, storeDir, pNid, exePath, exeBase, serverBinName, isMasterTray, port)
 
 	var (
 		serverCmd *exec.Cmd
@@ -247,6 +257,13 @@ func main() {
 			}
 		}()
 
+		if isMasterTray {
+			mState := getMobileState(storeDir)
+			if mState.Running {
+				_, _ = startMobileProxy(port, 4984, storeDir)
+			}
+		}
+
 		targetURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 		w.Dispatch(func() {
 			if wasMaximized {
@@ -258,4 +275,7 @@ func main() {
 
 	w.Run()
 	cleanupOnce()
+	if reallyQuit {
+		os.Exit(0)
+	}
 }

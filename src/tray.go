@@ -11,9 +11,11 @@ import (
 )
 
 const (
-	ID_TRAY_NEW  = 1001
-	ID_TRAY_QUIT = 1002
-	ID_CONN_BASE = 2000
+	ID_TRAY_NEW    = 1001
+	ID_TRAY_QUIT   = 1002
+	ID_TRAY_MOBILE = 1003
+	ID_TRAY_STOP_MOBILE = 1004
+	ID_CONN_BASE   = 2000
 )
 
 type NOTIFYICONDATAW struct {
@@ -52,7 +54,7 @@ func setupTrayIcon(hwnd uintptr, appTitle string, hIcon uintptr) NOTIFYICONDATAW
 	return nid
 }
 
-func showTrayContextMenu(hwnd uintptr, w webview.WebView, storeDir string, pNid *NOTIFYICONDATAW, exePath, serverBinName string) {
+func showTrayContextMenu(hwnd uintptr, w webview.WebView, storeDir string, pNid *NOTIFYICONDATAW, exePath, serverBinName string, serverPort int) {
 	hMenu, _, _ := procCreatePopupMenu.Call()
 	if hMenu == 0 {
 		return
@@ -69,6 +71,21 @@ func showTrayContextMenu(hwnd uintptr, w webview.WebView, storeDir string, pNid 
 		}
 		procAppendMenuW.Call(hMenu, MF_SEPARATOR, 0, 0)
 	}
+
+	// Mobile Access menu items
+	mobileState := getMobileState(storeDir)
+	if mobileState.Running {
+		mobileLabel := fmt.Sprintf("Mobile Access (Port %d)...", mobileState.Port)
+		mobileStr, _ := syscall.UTF16PtrFromString(mobileLabel)
+		procAppendMenuW.Call(hMenu, MF_STRING, ID_TRAY_MOBILE, uintptr(unsafe.Pointer(mobileStr)))
+
+		stopMobileStr, _ := syscall.UTF16PtrFromString("Stop Mobile Server")
+		procAppendMenuW.Call(hMenu, MF_STRING, ID_TRAY_STOP_MOBILE, uintptr(unsafe.Pointer(stopMobileStr)))
+	} else {
+		mobileStr, _ := syscall.UTF16PtrFromString("Mobile Access...")
+		procAppendMenuW.Call(hMenu, MF_STRING, ID_TRAY_MOBILE, uintptr(unsafe.Pointer(mobileStr)))
+	}
+	procAppendMenuW.Call(hMenu, MF_SEPARATOR, 0, 0)
 
 	newWinStr, _ := syscall.UTF16PtrFromString("New Empty Window")
 	quitStr, _ := syscall.UTF16PtrFromString("Quit Drizzle Gateway")
@@ -109,11 +126,20 @@ func showTrayContextMenu(hwnd uintptr, w webview.WebView, storeDir string, pNid 
 	)
 	procPostMessageW.Call(menuOwner, 0, 0, 0)
 
-	if cmd == ID_TRAY_NEW {
+	if cmd == ID_TRAY_STOP_MOBILE {
+		stopMobileProxy(storeDir)
+	} else if cmd == ID_TRAY_MOBILE {
+		state := getMobileState(storeDir)
+		if !state.Running {
+			_, _ = startMobileProxy(serverPort, 4984, storeDir)
+		}
+		_ = exec.Command(exePath, "--mobile").Start()
+	} else if cmd == ID_TRAY_NEW {
 		_ = exec.Command(exePath, "--empty").Start()
 	} else if cmd == ID_TRAY_QUIT {
 		procShell_NotifyIconW.Call(NIM_DELETE, uintptr(unsafe.Pointer(pNid)))
 		saveWindowState(hwnd, filepath.Base(filepath.Dir(storeDir)))
+		cleanupMobileProxy()
 		reallyQuit = true
 		closeAllGatewayInstances(filepath.Base(exePath), serverBinName)
 		w.Terminate()

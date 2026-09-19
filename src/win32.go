@@ -89,6 +89,11 @@ var (
 	modPsapi            = syscall.NewLazyDLL("psapi.dll")
 	procEmptyWorkingSet = modPsapi.NewProc("EmptyWorkingSet")
 	procOpenProcess     = modKernel32.NewProc("OpenProcess")
+	procCreateJobObjectW         = modKernel32.NewProc("CreateJobObjectW")
+	procSetInformationJobObject  = modKernel32.NewProc("SetInformationJobObject")
+	procAssignProcessToJobObject = modKernel32.NewProc("AssignProcessToJobObject")
+	procGetCurrentProcess        = modKernel32.NewProc("GetCurrentProcess")
+
 )
 
 type PROCESSENTRY32W struct {
@@ -276,11 +281,68 @@ func trimAllGatewayMemory(exeBaseName, serverBaseName string) {
 	}
 }
 
+
+type JOBOBJECT_BASIC_LIMIT_INFORMATION struct {
+	PerProcessUserTimeLimit int64
+	PerJobUserTimeLimit     int64
+	LimitFlags              uint32
+	MinimumWorkingSetSize   uintptr
+	MaximumWorkingSetSize   uintptr
+	ActiveProcessLimit      uint32
+	Affinity                uintptr
+	PriorityClass           uint32
+	SchedulingClass         uint32
+}
+
+type IO_COUNTERS struct {
+	ReadOperationCount  uint64
+	WriteOperationCount uint64
+	OtherOperationCount uint64
+	ReadTransferCount   uint64
+	WriteTransferCount  uint64
+	OtherTransferCount  uint64
+}
+
+type JOBOBJECT_EXTENDED_LIMIT_INFORMATION struct {
+	BasicLimitInformation JOBOBJECT_BASIC_LIMIT_INFORMATION
+	IoInfo                 IO_COUNTERS
+	ProcessMemoryLimit     uintptr
+	JobMemoryLimit         uintptr
+	PeakProcessMemoryLimit uintptr
+	PeakJobMemoryLimit     uintptr
+}
+
+func initJobObject() {
+	hJob, _, _ := procCreateJobObjectW.Call(0, 0)
+	if hJob == 0 {
+		return
+	}
+	const JobObjectExtendedLimitInformation = 9
+	const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+
+	var info JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+	info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+
+	ret, _, _ := procSetInformationJobObject.Call(
+		hJob,
+		uintptr(JobObjectExtendedLimitInformation),
+		uintptr(unsafe.Pointer(&info)),
+		uintptr(unsafe.Sizeof(info)),
+	)
+	if ret == 0 {
+		return
+	}
+
+	hProc, _, _ := procGetCurrentProcess.Call()
+	procAssignProcessToJobObject.Call(hJob, hProc)
+}
+
 func closeAllGatewayInstances(exeBaseName, serverBaseName string) {
 	currentPid := uint32(syscall.Getpid())
 
 	snap, _, _ := procCreateToolhelp32Snapshot.Call(0x00000002, 0)
 	if snap == uintptr(syscall.InvalidHandle) {
+		stopServers(serverBaseName)
 		return
 	}
 	defer procCloseHandle.Call(snap)
@@ -288,19 +350,37 @@ func closeAllGatewayInstances(exeBaseName, serverBaseName string) {
 	var entry PROCESSENTRY32W
 	entry.DwSize = uint32(unsafe.Sizeof(entry))
 
-	var otherPids []uint32
+	var allEntries []PROCESSENTRY32W
 
 	ret, _, _ := procProcess32FirstW.Call(snap, uintptr(unsafe.Pointer(&entry)))
 	for ret != 0 {
-		name := syscall.UTF16ToString(entry.SzExeFile[:])
-		pid := entry.Th32ProcessID
-		if pid != currentPid && strings.EqualFold(name, exeBaseName) {
-			otherPids = append(otherPids, pid)
-		}
+		allEntries = append(allEntries, entry)
 		ret, _, _ = procProcess32NextW.Call(snap, uintptr(unsafe.Pointer(&entry)))
 	}
 
-	for _, pid := range otherPids {
+	// 1. Identify all gateway PIDs (both current and others)
+	gatewayPids := map[uint32]bool{currentPid: true}
+	for _, e := range allEntries {
+		name := syscall.UTF16ToString(e.SzExeFile[:])
+		if strings.EqualFold(name, exeBaseName) {
+			gatewayPids[e.Th32ProcessID] = true
+		}
+	}
+
+	// 2. Discover all children and grandchildren (msedgewebview2.exe, renderers, etc.)
+	for pass := 0; pass < 4; pass++ {
+		for _, e := range allEntries {
+			if gatewayPids[e.Th32ParentProcessID] {
+				gatewayPids[e.Th32ProcessID] = true
+			}
+		}
+	}
+
+	// 3. Terminate all other gateway processes AND their webview2 children
+	for pid := range gatewayPids {
+		if pid == currentPid {
+			continue
+		}
 		hProc, _, _ := procOpenProcess.Call(0x0001, 0, uintptr(pid)) // PROCESS_TERMINATE = 0x0001
 		if hProc != 0 {
 			procTerminateProcess.Call(hProc, 0)

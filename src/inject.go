@@ -15,6 +15,10 @@ var toastScript string
 //go:embed inject/ui/loading.html
 var loadingHTMLTemplate string
 
+//go:embed inject/ui/mobile_pair.html
+var mobilePairHTMLTemplate string
+
+
 //go:embed inject/copy/copy.js
 var copyScript string
 

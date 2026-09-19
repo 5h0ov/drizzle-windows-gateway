@@ -18,12 +18,22 @@ Grab the standalone executable package from GitHub Releases:
 
 ---
 
+## Documentation
+
+For a full step-by-step walkthrough covering database management, multi-window workflows, and mobile PWA installation:
+
+👉 **[Read the Complete User Guide (USAGE.md)](./USAGE.md)**
+
+---
+
 ## Highlights
 
 * **100% Native (Zero WSL / Zero Docker):** Runs directly as native Windows processes. Drops to **0 MB RAM** immediately when closed.
 * **Low Memory Footprint:** Consumes ~150–250 MB under active database usage (compared to 1.5–2 GB on WSL2 / Docker Desktop), dropping down to ~35 MB when idle in the background tray via Win32 working-set trimming.
 * **System Tray Quick-Launcher:** Stays in your taskbar notification area. Right-click to launch any saved database connection (`PostgreSQL`, `MySQL`, `SQLite`, `LibSQL`) into a dedicated window.
 * **Multi-Window Support:** Open multiple database windows concurrently. All instances share a single backend daemon to minimize memory.
+* **Mobile Access & Standalone PWA:** Access your databases on your phone or tablet. Scan the pairing QR code from the tray menu to connect via **Tailscale** (with automatic zero-config HTTPS detection for a true, standalone installable PWA) or local **Wi-Fi LAN**, secured with automated token authentication.
+* **Process Lifetime Management:** Windows Job Object integration and recursive process tree termination ensure all WebView2 renderers and background tasks terminate cleanly when exiting from the tray.
 * **Session & State Persistence:**
   * Credentials & connections: `%APPDATA%\DrizzleGateway\data\store.json`
   * Tabs, queries & cache: `%APPDATA%\DrizzleGateway\webview2\`
@@ -45,6 +55,9 @@ bun run build
 
 # Update & rebuild from latest upstream Drizzle Gateway release
 bun run update
+
+# Lint & code format checks (Biome)
+bun run check
 ```
 
 > **Automated Releases:** A weekly GitHub Actions workflow checks Drizzle's docs every Sunday at midnight UTC and automatically publishes new versions to Releases.
