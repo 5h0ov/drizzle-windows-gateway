@@ -1,3 +1,4 @@
+const DRIZZLE_BINARY_REGEX = /drizzle-gateway-(\d+\.\d+\.\d+)-linux-x64/;
 import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
@@ -12,8 +13,10 @@ async function getLatestVersion() {
   try {
     const res = await fetch("https://gateway.drizzle.team/docs/binary");
     const text = await res.text();
-    const match = text.match(/drizzle-gateway-(\d+\.\d+\.\d+)-linux-x64/);
-    if (match) return match[1];
+    const match = text.match(DRIZZLE_BINARY_REGEX);
+    if (match) {
+      return match[1];
+    }
   } catch (e) {
     console.warn("Could not reach docs for version check:", e.message);
   }
@@ -29,13 +32,19 @@ if (!targetVersion || targetVersion === "latest") {
 }
 
 const binaryPath = path.join(tempDir, `gateway-${targetVersion}`);
-if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
-if (!fs.existsSync(assetsDir)) fs.mkdirSync(assetsDir, { recursive: true });
+if (!fs.existsSync(tempDir)) {
+  fs.mkdirSync(tempDir, { recursive: true });
+}
+if (!fs.existsSync(assetsDir)) {
+  fs.mkdirSync(assetsDir, { recursive: true });
+}
 
-if (!fs.existsSync(binaryPath)) {
+if (fs.existsSync(binaryPath)) {
+  console.log(`Using cached ${binaryPath}`);
+} else {
   const urls = [
     `https://pub-e240a4fd7085425baf4a7951e7611520.r2.dev/drizzle-gateway-${targetVersion}-linux-x64`,
-    `https://gateway.drizzle.team/binaries/drizzle-gateway-${targetVersion}-linux-x64`
+    `https://gateway.drizzle.team/binaries/drizzle-gateway-${targetVersion}-linux-x64`,
   ];
   let downloaded = false;
   for (const url of urls) {
@@ -49,10 +58,10 @@ if (!fs.existsSync(binaryPath)) {
     }
   }
   if (!downloaded) {
-    throw new Error(`Failed to download Drizzle Gateway binary for version ${targetVersion}`);
+    throw new Error(
+      `Failed to download Drizzle Gateway binary for version ${targetVersion}`
+    );
   }
-} else {
-  console.log(`Using cached ${binaryPath}`);
 }
 
 console.log("Extracting Bun bundle...");
@@ -64,7 +73,9 @@ let lastBunIdx = -1;
 let pos = 0;
 while (true) {
   const idx = buf.indexOf(bunMarker, pos);
-  if (idx === -1) break;
+  if (idx === -1) {
+    break;
+  }
   lastBunIdx = idx;
   pos = idx + bunMarker.length;
 }
@@ -80,12 +91,14 @@ pos = 0;
 
 while (true) {
   const idx = buf.indexOf(bunfsMarker, pos);
-  if (idx === -1) break;
+  if (idx === -1) {
+    break;
+  }
   const nameStart = idx + bunfsMarker.length;
   const nameEnd = buf.indexOf(0, nameStart);
   const fileName = buf.subarray(nameStart, nameEnd).toString("utf8").trim();
   const contentStart = nameEnd + 1;
-  
+
   if (/\.(svg|html|js|css)$/i.test(fileName)) {
     webAssets.push({ name: fileName, start: contentStart, markerIdx: idx });
   }
@@ -93,14 +106,21 @@ while (true) {
 }
 
 console.log(`Found ${webAssets.length} embedded web assets:`);
-webAssets.forEach((f) => console.log(`  - ${f.name}`));
+for (const f of webAssets) {
+  console.log(`  - ${f.name}`);
+}
 
 // Extract server.js
 const firstAssetMarker = webAssets[0]?.markerIdx ?? buf.length;
 let serverCode = buf.subarray(lastBunIdx, firstAssetMarker).toString("utf8");
 
 // Trim trailing null bytes from server.js
-while (serverCode.length > 0 && (serverCode.charCodeAt(serverCode.length - 1) === 0 || (serverCode.endsWith("\n") && serverCode.charCodeAt(serverCode.length - 2) === 0))) {
+while (
+  serverCode.length > 0 &&
+  (serverCode.charCodeAt(serverCode.length - 1) === 0 ||
+    (serverCode.endsWith("\n") &&
+      serverCode.charCodeAt(serverCode.length - 2) === 0))
+) {
   serverCode = serverCode.replace(/\0+$/, "");
 }
 
@@ -110,28 +130,37 @@ const magicIdx = buf.lastIndexOf(bunMagic);
 
 for (let i = 0; i < webAssets.length; i++) {
   const file = webAssets[i];
-  const nextMarker = webAssets[i + 1]?.markerIdx ?? (magicIdx !== -1 ? magicIdx : buf.length);
-  
+  const nextMarker =
+    webAssets[i + 1]?.markerIdx ?? (magicIdx === -1 ? buf.length : magicIdx);
+
   let fileBuf = buf.subarray(file.start, nextMarker);
 
   if (file.name.endsWith(".css")) {
     const lastBrace = fileBuf.lastIndexOf(125); // '}'
-    if (lastBrace !== -1) fileBuf = fileBuf.subarray(0, lastBrace + 1);
+    if (lastBrace !== -1) {
+      fileBuf = fileBuf.subarray(0, lastBrace + 1);
+    }
   } else if (file.name.endsWith(".html")) {
     const endTag = Buffer.from("</html>");
     const endIdx = fileBuf.lastIndexOf(endTag);
-    if (endIdx !== -1) fileBuf = fileBuf.subarray(0, endIdx + endTag.length);
+    if (endIdx !== -1) {
+      fileBuf = fileBuf.subarray(0, endIdx + endTag.length);
+    }
   } else if (file.name.endsWith(".svg")) {
     const endTag = Buffer.from("</svg>");
     const endIdx = fileBuf.lastIndexOf(endTag);
-    if (endIdx !== -1) fileBuf = fileBuf.subarray(0, endIdx + endTag.length);
+    if (endIdx !== -1) {
+      fileBuf = fileBuf.subarray(0, endIdx + endTag.length);
+    }
   } else if (file.name.endsWith(".js")) {
     const endTag = Buffer.from(");");
     const endIdx = fileBuf.lastIndexOf(endTag);
-    if (endIdx !== -1) fileBuf = fileBuf.subarray(0, endIdx + endTag.length);
+    if (endIdx !== -1) {
+      fileBuf = fileBuf.subarray(0, endIdx + endTag.length);
+    }
   }
 
-  while (fileBuf.length > 0 && fileBuf[fileBuf.length - 1] === 0) {
+  while (fileBuf.length > 0 && fileBuf.at(-1) === 0) {
     fileBuf = fileBuf.subarray(0, fileBuf.length - 1);
   }
 
@@ -141,16 +170,20 @@ for (let i = 0; i < webAssets.length; i++) {
 }
 
 // Automatically generate app.ico from the binary's extracted SVG favicon
-const svgAsset = webAssets.find(f => f.name.endsWith(".svg"));
+const svgAsset = webAssets.find((f) => f.name.endsWith(".svg"));
 if (svgAsset) {
   const svgPath = path.join(assetsDir, svgAsset.name);
-  console.log(`Generating application icon directly from extracted ${svgAsset.name}...`);
+  console.log(
+    `Generating application icon directly from extracted ${svgAsset.name}...`
+  );
   try {
     const { Resvg } = await import("@resvg/resvg-js");
     const svgData = fs.readFileSync(svgPath);
     const sizes = [16, 24, 32, 48, 64, 128, 256];
-    const pngList = sizes.map(size => {
-      const resvg = new Resvg(svgData, { fitTo: { mode: "width", value: size } });
+    const pngList = sizes.map((size) => {
+      const resvg = new Resvg(svgData, {
+        fitTo: { mode: "width", value: size },
+      });
       return { size, buffer: resvg.render().asPng() };
     });
 
@@ -175,20 +208,29 @@ if (svgAsset) {
       offset += item.buffer.length;
     }
 
-    const icoBuf = Buffer.concat([header, ...entries, ...pngList.map(i => i.buffer)]);
+    const icoBuf = Buffer.concat([
+      header,
+      ...entries,
+      ...pngList.map((i) => i.buffer),
+    ]);
     const srcDir = path.join(rootDir, "src");
     fs.writeFileSync(path.join(srcDir, "app.ico"), icoBuf);
     fs.writeFileSync(path.join(srcDir, "app.rc"), '1 ICON "app.ico"\n');
 
     // Compile app.syso if windres is available
     try {
-      execSync(`windres -O coff -o "${path.join(srcDir, "app.syso")}" "${path.join(srcDir, "app.rc")}"`, {
-        cwd: srcDir,
-        stdio: "ignore"
-      });
+      execSync(
+        `windres -O coff -o "${path.join(srcDir, "app.syso")}" "${path.join(srcDir, "app.rc")}"`,
+        {
+          cwd: srcDir,
+          stdio: "ignore",
+        }
+      );
       console.log("Successfully compiled src/app.syso with windres.");
     } catch {
-      console.log("Note: windres not available in PATH; using existing src/app.syso if present.");
+      console.log(
+        "Note: windres not available in PATH; using existing src/app.syso if present."
+      );
     }
     console.log("Updated application icon from upstream binary.");
   } catch (err) {
@@ -210,26 +252,42 @@ function resolveAsset(name) {
 }
 `;
 
-serverCode = serverCode.replace(/"(\/\$bunfs\/root\/)?([^"]+\.(svg|html|js|css))"/g, (match, prefix, p1) => {
-  if (prefix) return `resolveAsset("${p1}")`;
-  return match;
-});
-serverCode = serverCode.replace(/import\.meta\.dir \+ "\/([^"]+)"/g, (match, p1) => `resolveAsset("${p1}")`);
+serverCode = serverCode.replace(
+  /"(\/\$bunfs\/root\/)?([^"]+\.(svg|html|js|css))"/g,
+  (match, prefix, p1) => {
+    if (prefix) {
+      return `resolveAsset("${p1}")`;
+    }
+    return match;
+  }
+);
+serverCode = serverCode.replace(
+  /import\.meta\.dir \+ "\/([^"]+)"/g,
+  (_match, p1) => `resolveAsset("${p1}")`
+);
 
 const patchedServerPath = path.join(tempDir, "server.js");
-fs.writeFileSync(patchedServerPath, polyfill + "\n" + serverCode);
+fs.writeFileSync(patchedServerPath, `${polyfill}\n${serverCode}`);
 console.log("Saved patched server.js");
 
 // Compile DrizzleGatewayServer.exe with Bun
 console.log("Compiling DrizzleGatewayServer.exe with Bun...");
 const serverExeOut = path.join(rootDir, "DrizzleGatewayServer.exe");
-execSync(`bun build "${patchedServerPath}" --compile --outfile "${serverExeOut}"`, { stdio: "inherit" });
+execSync(
+  `bun build "${patchedServerPath}" --compile --outfile "${serverExeOut}"`,
+  { stdio: "inherit" }
+);
 
 // Compile DrizzleGateway.exe with Go
 console.log("Compiling DrizzleGateway.exe with Go...");
-execSync(`go build -ldflags="-H windowsgui -s -w" -o "${path.join(rootDir, "DrizzleGateway.exe")}" ./src`, {
-  cwd: rootDir,
-  stdio: "inherit"
-});
+execSync(
+  `go build -ldflags="-H windowsgui -s -w" -o "${path.join(rootDir, "DrizzleGateway.exe")}" ./src`,
+  {
+    cwd: rootDir,
+    stdio: "inherit",
+  }
+);
 
-console.log(`\n Build complete for v${targetVersion}! Native Windows application ready.`);
+console.log(
+  `\n Build complete for v${targetVersion}! Native Windows application ready.`
+);

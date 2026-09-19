@@ -1,0 +1,122 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
+  "root": true,
+  "extends": ["ultracite/biome/core"],
+  "files": {
+    "includes": [
+      "src/inject/**",
+      "scripts/**",
+      "package.json",
+      "biome.json",
+      "!assets",
+      "!custom",
+      "!drizzle-gateway-volume",
+      "!.temp_update"
+    ],
+    "ignoreUnknown": true
+  },
+  "javascript": {
+    "globals": ["themePref", "initConn", "initEmpty"]
+  },
+  "css": {
+    "parser": {
+      "cssModules": true
+    }
+  },
+  "linter": {
+    "rules": {
+      "a11y": {
+        "noNoninteractiveElementInteractions": "warn",
+        "noStaticElementInteractions": "warn",
+        "useSemanticElements": "warn",
+        "noSvgWithoutTitle": "off",
+        "useButtonType": "warn"
+      },
+      "nursery": {
+        "useSortedClasses": "off"
+      },
+      "style": {
+        "useFilenamingConvention": "off",
+        "useNamingConvention": "off",
+        "useConsistentTypeDefinitions": "off",
+        "noEnum": "off",
+        "noNestedTernary": "warn",
+        "useBlockStatements": "warn",
+        "useConsistentObjectDefinitions": "warn",
+        "useCollapsedElseIf": "warn",
+        "useForOf": "warn",
+        "useCollapsedIf": "warn",
+        "noNonNullAssertion": "warn",
+        "noUselessElse": "warn",
+        "useNumericSeparators": "warn",
+        "noUnusedTemplateLiteral": "warn",
+        "noIncrementDecrement": "off",
+        "useDestructuring": "off",
+        "noNegationElse": "warn",
+        "useTemplate": "warn",
+        "useNumberNamespace": "warn",
+        "useAtIndex": "warn"
+      },
+      "suspicious": {
+        "noConsole": "off",
+        "noEmptyBlockStatements": "warn",
+        "noAlert": "off",
+        "useStrictMode": "off",
+        "noUnnecessaryConditions": "off",
+        "noEqualsToNull": "off",
+        "useIterableCallbackReturn": "warn"
+      },
+      "performance": {
+        "noNamespaceImport": "off",
+        "noBarrelFile": "off",
+        "useTopLevelRegex": "warn",
+        "noImgElement": "warn"
+      },
+      "security": {
+        "noSecrets": "off"
+      },
+      "complexity": {
+        "noExcessiveCognitiveComplexity": "off",
+        "useSimplifiedLogicExpression": "warn",
+        "useArrowFunction": "warn",
+        "noUselessCatchBinding": "warn",
+        "noVoid": "warn",
+        "noForEach": "warn",
+        "useLiteralKeys": "warn",
+        "useOptionalChain": "warn"
+      },
+      "correctness": {
+        "noUnusedImports": "off",
+        "noUnusedFunctionParameters": "warn",
+        "noUnusedVariables": "warn",
+        "useExhaustiveDependencies": "warn",
+        "useHookAtTopLevel": "warn",
+        "useImageSize": "warn"
+      }
+    }
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        "useSortedAttributes": "off",
+        "useSortedProperties": "off",
+        "useSortedPackageJson": "off",
+        "organizeImports": "off",
+        "useSortedKeys": "off"
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["src/inject/**"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noUnusedVariables": "off",
+            "noUndeclaredVariables": "off"
+          }
+        }
+      }
+    }
+  ]
+}
