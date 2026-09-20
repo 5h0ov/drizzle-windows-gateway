@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"unsafe"
 	"time"
 
 	"rsc.io/qr"
@@ -499,6 +500,52 @@ func generateQRSVG(content string) string {
 	return fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" shape-rendering="crispEdges" style="width:100%%;height:100%%;display:block;"><rect width="100%%" height="100%%" fill="#ffffff"/><path d="%s" fill="#09090b"/></svg>`, totalSize, totalSize, path.String())
 }
 
+
+var (
+	modUser32Clipboard    = syscall.NewLazyDLL("user32.dll")
+	procOpenClipboard     = modUser32Clipboard.NewProc("OpenClipboard")
+	procCloseClipboard    = modUser32Clipboard.NewProc("CloseClipboard")
+	procEmptyClipboard    = modUser32Clipboard.NewProc("EmptyClipboard")
+	procSetClipboardData  = modUser32Clipboard.NewProc("SetClipboardData")
+	procGlobalAlloc       = modKernel32.NewProc("GlobalAlloc")
+	procGlobalLock        = modKernel32.NewProc("GlobalLock")
+	procGlobalUnlock      = modKernel32.NewProc("GlobalUnlock")
+)
+
+func setClipboardText(text string) error {
+	utf16Chars, err := syscall.UTF16FromString(text)
+	if err != nil {
+		return err
+	}
+	r1, _, _ := procOpenClipboard.Call(0)
+	if r1 == 0 {
+		return fmt.Errorf("OpenClipboard failed")
+	}
+	defer procCloseClipboard.Call()
+
+	procEmptyClipboard.Call()
+
+	bytesCount := uintptr(len(utf16Chars) * 2)
+	const GMEM_MOVEABLE = 0x0002
+	hMem, _, _ := procGlobalAlloc.Call(GMEM_MOVEABLE, bytesCount)
+	if hMem == 0 {
+		return fmt.Errorf("GlobalAlloc failed")
+	}
+
+	ptr, _, _ := procGlobalLock.Call(hMem)
+	if ptr == 0 {
+		return fmt.Errorf("GlobalLock failed")
+	}
+
+	dst := unsafe.Slice((*uint16)(unsafe.Pointer(ptr)), len(utf16Chars))
+	copy(dst, utf16Chars)
+	procGlobalUnlock.Call(hMem)
+
+	const CF_UNICODETEXT = 13
+	procSetClipboardData.Call(CF_UNICODETEXT, hMem)
+	return nil
+}
+
 func runMobilePairingWindow(appTitle, dirName string, localPort int, isEnhanced bool) {
 	storeDir := appDataDir(dirName)
 	state := getMobileState(storeDir)
@@ -535,6 +582,10 @@ func runMobilePairingWindow(appTitle, dirName string, localPort int, isEnhanced 
 
 	w := webview.New(false)
 	defer w.Destroy()
+
+	_ = w.Bind("copyToClipboard", func(text string) error {
+		return setClipboardText(text)
+	})
 
 	_ = w.Bind("stopMobileServer", func() error {
 		stopMobileProxy(storeDir)

@@ -602,12 +602,46 @@
     }
 
     async function copyCurrentUrl() {
-      const val = document.getElementById("url-text").value;
-      if (!val) {
+      const input = document.getElementById("url-text");
+      if (!input?.value) {
         return;
       }
+      const val = input.value;
+      let copied = false;
+
+      // 1. Native Go Win32 clipboard binding
       try {
-        await navigator.clipboard.writeText(val);
+        if (window.copyToClipboard) {
+          await window.copyToClipboard(val);
+          copied = true;
+        }
+      } catch {
+        // Fallback
+      }
+
+      // 2. Input selection + execCommand fallback
+      if (!copied) {
+        try {
+          input.focus();
+          input.select();
+          input.setSelectionRange(0, 99_999);
+          copied = document.execCommand("copy");
+        } catch {
+          // Fallback
+        }
+      }
+
+      // 3. navigator.clipboard fallback
+      if (!copied) {
+        try {
+          await navigator.clipboard.writeText(val);
+          copied = true;
+        } catch {
+          // Fallback
+        }
+      }
+
+      if (copied) {
         const btn = document.getElementById("copy-btn");
         btn.textContent = "Copied!";
         btn.classList.add("copied");
@@ -615,8 +649,6 @@
           btn.textContent = "Copy";
           btn.classList.remove("copied");
         }, 2000);
-      } catch {
-        // Ignore clipboard write failure
       }
     }
 
